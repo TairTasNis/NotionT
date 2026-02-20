@@ -3,12 +3,12 @@ import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getDatabase } from "firebase/database";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAFRO6sU4j2Pc37U1IUWGFGgWntFC1SjAc",
-  authDomain: "notiont-ccaa4.firebaseapp.com",
-  projectId: "notiont-ccaa4",
-  storageBucket: "notiont-ccaa4.firebasestorage.app",
-  messagingSenderId: "106765390069",
-  appId: "1:106765390069:web:6ca8b624a84de0370075bc"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID
 };
 
 const app = initializeApp(firebaseConfig);

@@ -1,5 +1,13 @@
 export type ProjectType = 'text' | 'mindmap' | 'both';
 
+export interface ProjectVersion {
+  id: string;
+  projectId: string;
+  content: string;
+  title: string;
+  timestamp: number;
+}
+
 export interface Project {
   id: string;
   title: string;
@@ -9,4 +17,5 @@ export interface Project {
   ownerId?: string;
   isPublicView?: boolean;
   isPublicEdit?: boolean;
+  publicShowMindmap?: boolean;
 }

@@ -17,6 +17,9 @@ export default function BarChartComponent(props: any) {
   const [height, setHeight] = useState(props.node.attrs.height || '300px');
   const [isResizing, setIsResizing] = useState(false);
 
+  // Check if editor is editable
+  const isEditable = props.editor.isEditable;
+
   // Sync state when props change (e.g. undo/redo)
   useEffect(() => {
     setTempData(props.node.attrs.data);
@@ -28,6 +31,7 @@ export default function BarChartComponent(props: any) {
   }, [props.node.attrs]);
 
   const handleResizeStart = (e: React.MouseEvent) => {
+    if (!isEditable) return;
     e.preventDefault();
     e.stopPropagation();
     setIsResizing(true);
@@ -65,6 +69,7 @@ export default function BarChartComponent(props: any) {
   };
 
   const handleDoubleClick = () => {
+    if (!isEditable) return;
     setIsEditing(true);
     // Ensure we have a deep copy and valid structure
     const dataCopy = props.node.attrs.data.map((item: any) => ({
@@ -155,7 +160,7 @@ export default function BarChartComponent(props: any) {
   return (
     <NodeViewWrapper className="my-8 relative group inline-block" style={{ width: width }}>
       <div 
-        className={`border border-zinc-800 rounded-xl p-4 bg-zinc-900/50 hover:border-zinc-700 transition-colors cursor-pointer relative ${isResizing ? 'ring-2 ring-blue-500' : ''}`}
+        className={`border border-zinc-800 rounded-xl p-4 bg-zinc-900/50 hover:border-zinc-700 transition-colors ${isEditable ? 'cursor-pointer' : ''} relative ${isResizing ? 'ring-2 ring-blue-500' : ''}`}
         onDoubleClick={handleDoubleClick}
       >
         <h3 className="text-center text-zinc-400 font-medium mb-4 select-none">{props.node.attrs.title}</h3>
@@ -279,18 +284,22 @@ export default function BarChartComponent(props: any) {
           </ResponsiveContainer>
         </div>
         <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity flex gap-2">
-            <button onClick={handleDoubleClick} className="p-1 bg-zinc-800 rounded text-zinc-400 hover:text-white" title="Настройки">
-                <Settings size={14} />
-            </button>
+            {isEditable && (
+              <button onClick={handleDoubleClick} className="p-1 bg-zinc-800 rounded text-zinc-400 hover:text-white" title="Настройки">
+                  <Settings size={14} />
+              </button>
+            )}
         </div>
         
         {/* Resize Handle */}
-        <div 
-            className="absolute bottom-0 right-0 w-6 h-6 cursor-nwse-resize opacity-0 group-hover:opacity-100 flex items-center justify-center z-10"
-            onMouseDown={handleResizeStart}
-        >
-            <div className="w-3 h-3 bg-zinc-600 rounded-br-lg rounded-tl-sm hover:bg-blue-500 transition-colors"></div>
-        </div>
+        {isEditable && (
+          <div 
+              className="absolute bottom-0 right-0 w-6 h-6 cursor-nwse-resize opacity-0 group-hover:opacity-100 flex items-center justify-center z-10"
+              onMouseDown={handleResizeStart}
+          >
+              <div className="w-3 h-3 bg-zinc-600 rounded-br-lg rounded-tl-sm hover:bg-blue-500 transition-colors"></div>
+          </div>
+        )}
       </div>
 
       {/* Edit Modal */}

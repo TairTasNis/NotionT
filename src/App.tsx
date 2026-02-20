@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { HashRouter, Routes, Route, useNavigate, useParams, Navigate } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
 import Editor from './components/Editor';
@@ -97,13 +97,43 @@ function EditorWrapper() {
     return () => unsubscribe();
   }, [projectId, user]);
 
-  const handleSaveProject = async (updatedProject: Project) => {
+  const handleSaveProject = useCallback(async (updatedProject: Project) => {
     try {
         await set(ref(database, `projects/${updatedProject.id}`), updatedProject);
     } catch (error) {
         console.error("Error saving project:", error);
+        alert("Ошибка сохранения проекта. Проверьте права доступа.");
     }
-  };
+  }, []);
+
+  const handleSaveVersion = useCallback(async (content: string, title: string) => {
+    if (!project) return;
+    const versionId = crypto.randomUUID();
+    const timestamp = Date.now();
+    const version = {
+      id: versionId,
+      projectId: project.id,
+      content: content,
+      title: title,
+      timestamp: timestamp,
+    };
+    try {
+      await set(ref(database, `project_versions/${project.id}/${versionId}`), version);
+      
+      // Also update the main project
+      await set(ref(database, `projects/${project.id}`), {
+        ...project,
+        content,
+        title,
+        lastModified: timestamp
+      });
+
+      alert("Версия сохранена и изменения опубликованы!");
+    } catch (error) {
+      console.error("Error saving version:", error);
+      alert("Ошибка сохранения версии. Проверьте права доступа.");
+    }
+  }, [project]);
 
   if (loading) return <div className="min-h-screen bg-black text-white flex items-center justify-center">Загрузка...</div>;
   if (error) return <div className="min-h-screen bg-black text-white flex items-center justify-center">{error} <button onClick={() => navigate('/')} className="ml-4 underline">На главную</button></div>;
@@ -114,6 +144,7 @@ function EditorWrapper() {
       project={project} 
       onBack={() => navigate('/')}
       onSave={handleSaveProject}
+      onSaveVersion={handleSaveVersion}
     />
   );
 }

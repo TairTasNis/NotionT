@@ -1,6 +1,8 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { ArrowLeft, Bold, Italic, Underline, Heading1, Heading2, Heading3, LayoutPanelLeft, FileText, Network, Image as ImageIcon, Table as TableIcon, Eye, EyeOff, Plus, Trash2, Columns, Rows, ArrowRight, ArrowDown, Lock, Unlock, Maximize, BarChart as BarChartIcon, Code as CodeIcon, Languages, Share2 } from 'lucide-react';
-import { Project, ProjectType } from '../types';
+import { ArrowLeft, Bold, Italic, Underline, Heading1, Heading2, Heading3, LayoutPanelLeft, FileText, Network, Image as ImageIcon, Table as TableIcon, Eye, EyeOff, Plus, Trash2, Columns, Rows, ArrowRight, ArrowDown, Lock, Unlock, Maximize, BarChart as BarChartIcon, Code as CodeIcon, Languages, Share2, History, UploadCloud, Edit2, X, Check } from 'lucide-react';
+import { Project, ProjectType, ProjectVersion } from '../types';
+import { database } from '../lib/firebase';
+import { ref, onValue, get, remove, update } from 'firebase/database';
 import MindmapGraph from './MindmapGraph';
 import { parseMarkdownHeadings } from '../utils/markdownParser';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -18,29 +20,193 @@ import TranslatorModal from './TranslatorModal';
 import ShareModal from './ShareModal';
 import { uploadImageToImgBB } from '../services/imgbb';
 
-// ... CustomTable definition ...
+// Custom Table extension to support layout modes
+const CustomTable = Table.extend({
+  addAttributes() {
+    return {
+      ...this.parent?.(),
+      layoutMode: {
+        default: 'fixed',
+        parseHTML: element => element.getAttribute('data-layout-mode'),
+        renderHTML: attributes => {
+          return {
+            'data-layout-mode': attributes.layoutMode,
+            style: attributes.layoutMode === 'fixed' 
+              ? 'table-layout: fixed; width: 100%' 
+              : 'table-layout: auto; width: auto; min-width: 100%',
+          }
+        },
+      },
+    }
+  }
+});
 
 interface EditorProps {
   project: Project;
   onBack: () => void;
   onSave: (project: Project) => void;
+  onSaveVersion?: (content: string, title: string) => void;
 }
 
-export default function Editor({ project, onBack, onSave }: EditorProps) {
+export default function Editor({ project, onBack, onSave, onSaveVersion }: EditorProps) {
   const [content, setContent] = useState(project.content);
   const [title, setTitle] = useState(project.title);
   const [viewMode, setViewMode] = useState<ProjectType>(project.type);
   const [tableModal, setTableModal] = useState<{ isOpen: boolean; rows: number; cols: number }>({ isOpen: false, rows: 3, cols: 3 });
   const [translatorModal, setTranslatorModal] = useState<{ isOpen: boolean; text: string }>({ isOpen: false, text: '' });
   const [shareModalOpen, setShareModalOpen] = useState(false);
+  const [historyModalOpen, setHistoryModalOpen] = useState(false);
+  const [versions, setVersions] = useState<ProjectVersion[]>([]);
+  const [versionToRestore, setVersionToRestore] = useState<ProjectVersion | null>(null);
+  const [editingVersionId, setEditingVersionId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
   const [editorStateToken, setEditorStateToken] = useState(0); // Force re-render for toolbar
+
+  const [versionToDelete, setVersionToDelete] = useState<string | null>(null);
+
+  // ...
+
+  const handleDeleteClick = (versionId: string) => {
+    setVersionToDelete(versionId);
+  };
+
+  const confirmDelete = async () => {
+    if (!versionToDelete) return;
+    
+    try {
+      await remove(ref(database, `project_versions/${project.id}/${versionToDelete}`));
+      // Update local state
+      setVersions(prev => prev.filter(v => v.id !== versionToDelete));
+      setVersionToDelete(null);
+    } catch (error: any) {
+      console.error("Error deleting version:", error);
+      alert(`Ошибка удаления версии: ${error.message}`);
+    }
+  };
+
+  const startRenamingVersion = (version: ProjectVersion) => {
+    setEditingVersionId(version.id);
+    setEditingTitle(version.title);
+  };
+
+  const saveRenamedVersion = async (versionId: string) => {
+    try {
+      await update(ref(database, `project_versions/${project.id}/${versionId}`), {
+        title: editingTitle
+      });
+      // Update local state
+      setVersions(prev => prev.map(v => v.id === versionId ? { ...v, title: editingTitle } : v));
+      setEditingVersionId(null);
+    } catch (error) {
+      console.error("Error renaming version:", error);
+      alert("Ошибка переименования версии.");
+    }
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // ... headingTree useMemo ...
+  const handleSaveVersionWrapper = () => {
+    if (onSaveVersion) {
+      onSaveVersion(content, title);
+    }
+  };
 
-  // ... editor definition ...
+  // Parse headings for mindmap - Memoized to prevent re-renders on every editor transaction
+  const headingTree = useMemo(() => {
+    const tree = parseMarkdownHeadings(content);
+    tree.text = title || 'Untitled';
+    return tree;
+  }, [content, title]);
 
-  // ... useEffect for content sync ...
+  const editor = useEditor({
+    extensions: [
+      StarterKit.configure({
+        codeBlock: false,
+      }),
+      Image,
+      CustomTable.configure({
+        resizable: true,
+      }),
+      TableRow,
+      TableHeader,
+      TableCell,
+      Markdown,
+      BarChartExtension,
+      CodeBlockExtension,
+      BubbleMenuExtension.configure({
+        pluginKey: 'tableBubbleMenu',
+        shouldShow: ({ editor }) => {
+          return editor.isActive('table');
+        },
+      }),
+    ],
+    content: project.content,
+    onUpdate: ({ editor }) => {
+      const markdown = editor.storage.markdown.getMarkdown();
+      setContent(markdown);
+    },
+    onTransaction: () => {
+      setEditorStateToken(prev => prev + 1);
+    },
+    editorProps: {
+      attributes: {
+        class: 'prose prose-invert max-w-none focus:outline-none min-h-full p-8',
+      },
+    },
+  });
+
+  // Update editor content if project content changes externally (e.g. from mindmap)
+  useEffect(() => {
+    if (editor && content !== editor.storage.markdown.getMarkdown()) {
+       if (Math.abs(content.length - editor.storage.markdown.getMarkdown().length) > 5) {
+         editor.commands.setContent(content);
+       }
+    }
+  }, [content, editor]);
+
+  useEffect(() => {
+    if (historyModalOpen) {
+      const versionsRef = ref(database, `project_versions/${project.id}`);
+      get(versionsRef).then((snapshot) => {
+        if (snapshot.exists()) {
+          const versionsList = Object.values(snapshot.val()) as ProjectVersion[];
+          versionsList.sort((a, b) => b.timestamp - a.timestamp);
+          setVersions(versionsList);
+        } else {
+          setVersions([]);
+        }
+      });
+    }
+  }, [historyModalOpen, project.id]);
+
+  const handleRestoreClick = (version: ProjectVersion) => {
+    setVersionToRestore(version);
+  };
+
+  const confirmRestore = () => {
+    if (!versionToRestore) return;
+    
+    const version = versionToRestore;
+    console.log("Restoring version content:", version.content);
+    
+    setContent(version.content);
+    setTitle(version.title);
+    
+    if (editor) {
+      editor.commands.setContent(version.content);
+    }
+    
+    setVersionToRestore(null);
+    setHistoryModalOpen(false);
+    
+    // Save immediately
+    onSave({
+      ...project,
+      title: version.title,
+      content: version.content,
+      lastModified: Date.now(),
+    });
+    console.log("Version restored and saved.");
+  };
 
   const handleBack = () => {
     onSave({
@@ -57,15 +223,150 @@ export default function Editor({ project, onBack, onSave }: EditorProps) {
       onSave({ ...project, ...updates });
   };
 
-  // ... handleImageUpload ...
+  const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
 
-  // ... table handlers ...
+    try {
+      const imageUrl = await uploadImageToImgBB(file);
+      if (editor) {
+        editor.chain().focus().setImage({ src: imageUrl }).run();
+      }
+    } catch (error) {
+      console.error("Failed to upload image", error);
+      alert("Failed to upload image. Please try again.");
+    }
 
-  // ... handleNodeClick ...
+    event.target.value = '';
+  };
 
-  // ... handleNodeAdd ...
+  const handleTableInsertClick = () => {
+    setTableModal({ isOpen: true, rows: 3, cols: 3 });
+  };
 
-  // ... handleNodeDelete ...
+  const confirmInsertTable = () => {
+    if (editor) {
+      editor.chain().focus().insertTable({ rows: tableModal.rows, cols: tableModal.cols, withHeaderRow: true }).run();
+    }
+    setTableModal({ ...tableModal, isOpen: false });
+  };
+
+  const handleNodeClick = useCallback((lineIndex: number) => {
+    if (!editor) return;
+
+    const findNodeByLine = (node: any, line: number): any => {
+      if (node.line === line) return node;
+      for (const child of node.children) {
+        const found = findNodeByLine(child, line);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const targetNode = findNodeByLine(headingTree, lineIndex);
+
+    if (targetNode) {
+      let foundPos = -1;
+      editor.state.doc.descendants((node, pos) => {
+        if (foundPos !== -1) return false;
+        if (node.type.name === 'heading' && node.attrs.level === targetNode.level) {
+           if (node.textContent === targetNode.text) {
+             foundPos = pos;
+             return false;
+           }
+        }
+        return true;
+      });
+
+      if (foundPos !== -1) {
+        editor.chain().focus().setTextSelection(foundPos).scrollIntoView().run();
+      } else {
+         editor.chain().focus().run();
+      }
+    } else {
+        editor.chain().focus().run();
+    }
+  }, [editor, headingTree]);
+
+  const handleNodeAdd = (parentId: string, text: string) => {
+    const findNode = (node: any): any => {
+      if (node.id === parentId) return node;
+      for (const child of node.children) {
+        const found = findNode(child);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const parentNode = findNode(headingTree);
+    if (!parentNode) return;
+
+    const newLevel = parentNode.level + 1;
+    const hashes = '#'.repeat(Math.min(newLevel, 6));
+
+    let insertIndex = content.length;
+    
+    if (parentId !== 'root') {
+       const lines = content.split('\n');
+       const parentLineIndex = parentNode.line;
+       for (let i = parentLineIndex + 1; i < lines.length; i++) {
+           const match = lines[i].match(/^(#{1,6})\s/);
+           if (match) {
+               const level = match[1].length;
+               if (level <= parentNode.level) {
+                   insertIndex = lines.slice(0, i).join('\n').length + 1;
+                   break;
+               }
+           }
+       }
+    }
+
+    const before = content.substring(0, insertIndex);
+    const after = content.substring(insertIndex);
+    const toInsert = (before.endsWith('\n') ? '' : '\n') + `${hashes} ${text}` + (after.startsWith('\n') ? '' : '\n');
+    
+    const newMarkdown = before + toInsert + after;
+    setContent(newMarkdown);
+    if (editor) {
+        editor.commands.setContent(newMarkdown);
+    }
+  };
+
+  const handleNodeDelete = (id: string) => {
+    const findNode = (node: any): any => {
+      if (node.id === id) return node;
+      for (const child of node.children) {
+        const found = findNode(child);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const nodeToDelete = findNode(headingTree);
+    if (!nodeToDelete || nodeToDelete.id === 'root') return;
+
+    const lines = content.split('\n');
+    const startLine = nodeToDelete.line;
+    let endLine = lines.length;
+
+    for (let i = startLine + 1; i < lines.length; i++) {
+        const match = lines[i].match(/^(#{1,6})\s/);
+        if (match) {
+            const level = match[1].length;
+            if (level <= nodeToDelete.level) {
+                endLine = i;
+                break;
+            }
+        }
+    }
+
+    const newLines = [...lines.slice(0, startLine), ...lines.slice(endLine)];
+    const newMarkdown = newLines.join('\n');
+    setContent(newMarkdown);
+    if (editor) {
+        editor.commands.setContent(newMarkdown);
+    }
+  };
 
   if (!editor) {
     return null;
@@ -222,11 +523,19 @@ export default function Editor({ project, onBack, onSave }: EditorProps) {
 
         <div className="flex items-center gap-2 bg-zinc-900/50 p-1 rounded-lg border border-white/5">
            <button 
-             onClick={() => setShareModalOpen(true)}
-             className="p-1.5 rounded text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 transition-colors mr-2"
-             title="Поделиться"
+             onClick={() => setHistoryModalOpen(true)}
+             className="p-1.5 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+             title="История версий"
            >
-             <Share2 size={16} />
+             <History size={16} />
+           </button>
+           <button 
+             onClick={() => setShareModalOpen(true)}
+             className="flex items-center gap-2 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors ml-2"
+             title="Опубликовать"
+           >
+             <UploadCloud size={16} />
+             <span>Опубликовать</span>
            </button>
            <div className="w-px h-4 bg-white/10 mx-1" />
            <button 
@@ -336,11 +645,149 @@ export default function Editor({ project, onBack, onSave }: EditorProps) {
         }}
       />
 
+      {/* History Modal */}
+      {historyModalOpen && (
+        <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[60]" onClick={() => setHistoryModalOpen(false)}>
+          <div 
+            className="bg-zinc-900 p-6 rounded-xl border border-white/10 w-[500px] shadow-2xl max-h-[80vh] flex flex-col" 
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-medium mb-4 text-white flex items-center gap-2">
+              <History size={20} />
+              История версий
+            </h3>
+            
+            <div className="flex-1 overflow-y-auto space-y-2 mb-4 pr-2">
+              {versions.length === 0 ? (
+                <p className="text-zinc-500 text-center py-8">Нет сохраненных версий</p>
+              ) : (
+                versions.map((version) => (
+                  <div key={version.id} className="flex items-center justify-between p-3 bg-zinc-950/50 rounded-lg border border-white/5 hover:border-white/20 transition-colors group">
+                    <div className="flex-1 mr-4">
+                      <div className="font-medium text-sm text-white mb-0.5">{new Date(version.timestamp).toLocaleString()}</div>
+                      
+                      {editingVersionId === version.id ? (
+                        <div className="flex items-center gap-2">
+                          <input 
+                            type="text" 
+                            value={editingTitle}
+                            onChange={(e) => setEditingTitle(e.target.value)}
+                            className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-white outline-none w-full"
+                            autoFocus
+                          />
+                          <button onClick={() => saveRenamedVersion(version.id)} className="text-green-400 hover:text-green-300"><Check size={14} /></button>
+                          <button onClick={() => setEditingVersionId(null)} className="text-red-400 hover:text-red-300"><X size={14} /></button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2 group-hover:text-white text-zinc-500">
+                          <span className="text-xs truncate max-w-[150px]">{version.title}</span>
+                          <button onClick={() => startRenamingVersion(version)} className="opacity-0 group-hover:opacity-100 text-zinc-500 hover:text-white transition-opacity">
+                            <Edit2 size={12} />
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                    
+                    <div className="flex items-center gap-2">
+                      <button 
+                        onClick={() => handleRestoreClick(version)}
+                        className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-white rounded transition-colors"
+                      >
+                        Восстановить
+                      </button>
+                      <button 
+                        onClick={() => handleDeleteClick(version.id)}
+                        className="p-1.5 text-zinc-500 hover:text-red-400 transition-colors"
+                        title="Удалить версию"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))
+              )}
+            </div>
+
+            <div className="flex justify-end pt-4 border-t border-white/10">
+              <button 
+                onClick={() => setHistoryModalOpen(false)} 
+                className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors"
+              >
+                Закрыть
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Restore Confirmation Modal */}
+      {versionToRestore && (
+        <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[70]" onClick={() => setVersionToRestore(null)}>
+          <div 
+            className="bg-zinc-900 p-6 rounded-xl border border-white/10 w-[400px] shadow-2xl" 
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-medium mb-2 text-white">Подтверждение</h3>
+            <p className="text-zinc-400 mb-6 text-sm">
+              Вы уверены, что хотите восстановить версию от <span className="text-white font-medium">{new Date(versionToRestore.timestamp).toLocaleString()}</span>? 
+              <br/><br/>
+              Текущие несохраненные изменения будут потеряны.
+            </p>
+            
+            <div className="flex justify-end gap-2">
+              <button 
+                onClick={() => setVersionToRestore(null)} 
+                className="px-3 py-1.5 text-sm text-zinc-400 hover:text-white transition-colors"
+              >
+                Отмена
+              </button>
+              <button 
+                onClick={confirmRestore} 
+                className="px-3 py-1.5 text-sm bg-red-600 hover:bg-red-500 text-white rounded font-medium transition-colors"
+              >
+                Восстановить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Confirmation Modal */}
+      {versionToDelete && (
+        <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[70]" onClick={() => setVersionToDelete(null)}>
+          <div 
+            className="bg-zinc-900 p-6 rounded-xl border border-white/10 w-[400px] shadow-2xl" 
+            onClick={e => e.stopPropagation()}
+          >
+            <h3 className="text-lg font-medium mb-2 text-white">Удаление версии</h3>
+            <p className="text-zinc-400 mb-6 text-sm">
+              Вы уверены, что хотите удалить эту версию? Это действие нельзя отменить.
+            </p>
+            
+            <div className="flex justify-end gap-2">
+              <button 
+                onClick={() => setVersionToDelete(null)} 
+                className="px-3 py-1.5 text-sm text-zinc-400 hover:text-white transition-colors"
+              >
+                Отмена
+              </button>
+              <button 
+                onClick={confirmDelete} 
+                className="px-3 py-1.5 text-sm bg-red-600 hover:bg-red-500 text-white rounded font-medium transition-colors"
+              >
+                Удалить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       <ShareModal 
         isOpen={shareModalOpen}
         onClose={() => setShareModalOpen(false)}
         project={project}
         onUpdateProject={handleUpdateProject}
+        onSaveVersion={onSaveVersion ? handleSaveVersionWrapper : undefined}
       />
     </div>
   );

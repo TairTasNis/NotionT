@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useMemo } from 'react';
 import { useParams } from 'react-router-dom';
 import { useEditor, EditorContent } from '@tiptap/react';
 import { StarterKit } from '@tiptap/starter-kit';
@@ -13,6 +13,8 @@ import CodeBlockExtension from './extensions/CodeBlockExtension';
 import { database } from '../lib/firebase';
 import { ref, onValue } from 'firebase/database';
 import { Project } from '../types';
+import MindmapGraph from './MindmapGraph';
+import { parseMarkdownHeadings } from '../utils/markdownParser';
 
 // Reuse CustomTable from Editor (or extract to separate file, but duplicating for speed here)
 const CustomTable = Table.extend({
@@ -96,27 +98,52 @@ export default function PublicViewer() {
       }
   }, [project, editor]);
 
-  if (loading) return <div className="min-h-screen bg-white text-black flex items-center justify-center">Загрузка...</div>;
-  if (error) return <div className="min-h-screen bg-white text-black flex items-center justify-center">{error}</div>;
+  const headingTree = useMemo(() => {
+    if (!project) return null;
+    const tree = parseMarkdownHeadings(project.content);
+    tree.text = project.title || 'Untitled';
+    return tree;
+  }, [project]);
+
+  if (loading) return <div className="min-h-screen bg-black text-white flex items-center justify-center">Загрузка...</div>;
+  if (error) return <div className="min-h-screen bg-black text-white flex items-center justify-center">{error}</div>;
   if (!project) return null;
 
   return (
-    <div className="min-h-screen bg-white text-black font-sans selection:bg-blue-100 selection:text-black">
-      <div className="max-w-3xl mx-auto px-8 py-16">
-        <header className="mb-12 text-center">
-            <h1 className="text-4xl font-bold tracking-tight mb-4 text-gray-900">{project.title}</h1>
-            <div className="text-sm text-gray-500">
-                {new Date(project.lastModified).toLocaleDateString()}
-            </div>
-        </header>
+    <div className="min-h-screen bg-black text-white font-sans selection:bg-blue-500/30 selection:text-white flex flex-col">
+      <div className={`flex-1 ${project.publicShowMindmap ? 'flex' : 'max-w-3xl mx-auto px-8 py-16 w-full'}`}>
         
-        <article className="prose prose-lg prose-slate max-w-none">
-            <EditorContent editor={editor} />
-        </article>
+        {/* Content Area */}
+        <div className={`${project.publicShowMindmap ? 'w-1/2 border-r border-white/10 h-screen overflow-y-auto px-8 py-16' : ''}`}>
+            <header className="mb-12 text-center">
+                <h1 className="text-4xl font-bold tracking-tight mb-4 text-white">{project.title}</h1>
+                <div className="text-sm text-zinc-500">
+                    {new Date(project.lastModified).toLocaleDateString()}
+                </div>
+            </header>
+            
+            <article className="prose prose-lg prose-invert max-w-none">
+                <EditorContent editor={editor} />
+            </article>
 
-        <footer className="mt-20 pt-8 border-t border-gray-100 text-center text-gray-400 text-sm">
-            Powered by NotionT
-        </footer>
+            <footer className="mt-20 pt-8 border-t border-white/10 text-center text-zinc-600 text-sm">
+                Powered by NotionT
+            </footer>
+        </div>
+
+        {/* Mindmap Area */}
+        {project.publicShowMindmap && headingTree && (
+            <div className="w-1/2 h-screen">
+                <MindmapGraph 
+                    data={headingTree} 
+                    onNodeClick={(lineIndex) => {
+                        // Scroll to element logic could be added here if needed, 
+                        // but requires editor ref access or DOM manipulation
+                    }} 
+                    readOnly={true}
+                />
+            </div>
+        )}
       </div>
     </div>
   );
