@@ -280,9 +280,10 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
 
   // Update editor content if project content changes externally (e.g. from mindmap)
   useEffect(() => {
-    if (editor && content !== editor.storage.markdown.getMarkdown()) {
-      if (Math.abs(content.length - editor.storage.markdown.getMarkdown().length) > 5) {
-        editor.commands.setContent(content);
+    if (editor) {
+      const currentMarkdown = (editor.storage as any)?.markdown?.getMarkdown?.();
+      if (content !== currentMarkdown) {
+        editor.commands.setContent(content, { emitUpdate: false });
       }
     }
   }, [content, editor]);

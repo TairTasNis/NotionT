@@ -1,23 +1,33 @@
 {
   "rules": {
     "projects": {
-      ".indexOn": ["ownerId"],
+      ".indexOn": [
+        "ownerId"
+      ],
       ".read": "auth != null && query.orderByChild == 'ownerId' && query.equalTo == auth.uid",
       "$projectId": {
-        ".read": "auth != null && (data.child('ownerId').val() === auth.uid || data.child('isPublicView').val() === true || data.child('isPublicEdit').val() === true)",
+        ".read": "data.child('isPublicView').val() === true || data.child('isPublicEdit').val() === true || (auth != null && data.child('ownerId').val() === auth.uid)",
         ".write": "auth != null && ((!data.exists() && newData.child('ownerId').val() === auth.uid) || (data.exists() && (data.child('ownerId').val() === auth.uid || data.child('isPublicEdit').val() === true)))"
       }
     },
     "project_versions": {
       "$projectId": {
-        ".read": "auth != null && (root.child('projects').child($projectId).child('ownerId').val() === auth.uid || root.child('projects').child($projectId).child('isPublicView').val() === true || root.child('projects').child($projectId).child('isPublicEdit').val() === true)",
+        ".read": "root.child('projects').child($projectId).child('isPublicView').val() === true || root.child('projects').child($projectId).child('isPublicEdit').val() === true || (auth != null && root.child('projects').child($projectId).child('ownerId').val() === auth.uid)",
         ".write": "auth != null && (root.child('projects').child($projectId).child('ownerId').val() === auth.uid || root.child('projects').child($projectId).child('isPublicEdit').val() === true)"
+      }
+    },
+    "cursors": {
+      "$projectId": {
+        ".read": "root.child('projects').child($projectId).child('isPublicView').val() === true || root.child('projects').child($projectId).child('isPublicEdit').val() === true || (auth != null && root.child('projects').child($projectId).child('ownerId').val() === auth.uid)",
+        "$uid": {
+          ".write": "auth != null && $uid === auth.uid && (root.child('projects').child($projectId).child('ownerId').val() === auth.uid || root.child('projects').child($projectId).child('isPublicEdit').val() === true)"
+        }
       }
     },
     "users": {
       "$uid": {
-        ".read": "$uid === auth.uid",
-        ".write": "$uid === auth.uid"
+        ".read": "auth != null && $uid === auth.uid",
+        ".write": "auth != null && $uid === auth.uid"
       }
     }
   }

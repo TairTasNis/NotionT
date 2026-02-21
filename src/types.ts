@@ -15,6 +15,7 @@ export interface Project {
   content: string;
   lastModified: number;
   lastModifiedBy?: string;
+  senderId?: string;
   ownerId?: string;
   isPublicView?: boolean;
   isPublicEdit?: boolean;
