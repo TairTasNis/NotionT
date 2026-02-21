@@ -20,6 +20,7 @@
     "@hocuspocus/server": "^3.4.4",
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.1.14",
+    "@tiptap/y-tiptap": "^3.20.0",
     "@tiptap/extension-bubble-menu": "^3.20.0",
     "@tiptap/extension-collaboration": "^3.20.0",
     "@tiptap/extension-collaboration-cursor": "^3.20.0",
