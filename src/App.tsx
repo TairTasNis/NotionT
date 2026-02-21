@@ -7,7 +7,7 @@ import { Project, ProjectType } from './types';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
 import { database } from './lib/firebase';
-import { ref, onValue, set, push, remove, query, orderByChild, equalTo, get } from 'firebase/database';
+import { ref, onValue, set, push, remove, query, orderByChild, equalTo, get, update } from 'firebase/database';
 
 function DashboardWrapper() {
   const { user } = useAuth();
@@ -32,16 +32,19 @@ function DashboardWrapper() {
     return () => unsubscribe();
   }, [user]);
 
-  const handleCreateProject = async (type: ProjectType) => {
+  const handleCreateProject = async (type: ProjectType, title: string) => {
     if (!user) return;
-    const newProjectId = crypto.randomUUID();
+    
+    const newProjectId = push(ref(database, 'projects')).key;
+    if (!newProjectId) return;
+
     const newProject: Project = {
       id: newProjectId,
-      title: 'Untitled Project',
-      type,
-      content: '',
+      title: title,
+      type: type,
+      content: type === 'mindmap' ? '# Root' : '',
       lastModified: Date.now(),
-      ownerId: user.uid,
+      ownerId: user.uid
     };
 
     try {
@@ -52,11 +55,36 @@ function DashboardWrapper() {
     }
   };
 
+  const handleDeleteProject = async (id: string) => {
+    try {
+      // Delete versions FIRST because rules depend on project existing
+      await remove(ref(database, `project_versions/${id}`));
+      await remove(ref(database, `projects/${id}`));
+    } catch (error) {
+      console.error("Error deleting project:", error);
+      alert("Ошибка удаления проекта.");
+    }
+  };
+
+  const handleRenameProject = async (id: string, newTitle: string) => {
+    try {
+      await update(ref(database, `projects/${id}`), {
+        title: newTitle,
+        lastModified: Date.now()
+      });
+    } catch (error) {
+      console.error("Error renaming project:", error);
+      alert("Ошибка переименования проекта.");
+    }
+  };
+
   return (
     <Dashboard 
       onCreateProject={handleCreateProject} 
       projects={projects}
       onOpenProject={(id) => navigate(`/project/${id}`)}
+      onDeleteProject={handleDeleteProject}
+      onRenameProject={handleRenameProject}
     />
   );
 }

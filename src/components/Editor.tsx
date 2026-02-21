@@ -14,11 +14,16 @@ import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
 import { Markdown } from 'tiptap-markdown';
 import BubbleMenuExtension from '@tiptap/extension-bubble-menu';
+import Collaboration from '@tiptap/extension-collaboration';
+import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
+import * as Y from 'yjs';
+import { HocuspocusProvider } from '@hocuspocus/provider';
 import BarChartExtension from './extensions/BarChartExtension';
 import CodeBlockExtension from './extensions/CodeBlockExtension';
 import TranslatorModal from './TranslatorModal';
 import ShareModal from './ShareModal';
 import { uploadImageToImgBB } from '../services/imgbb';
+import { useAuth } from '../contexts/AuthContext';
 
 // Custom Table extension to support layout modes
 const CustomTable = Table.extend({
@@ -49,6 +54,7 @@ interface EditorProps {
 }
 
 export default function Editor({ project, onBack, onSave, onSaveVersion }: EditorProps) {
+  const { user } = useAuth();
   const [content, setContent] = useState(project.content);
   const [title, setTitle] = useState(project.title);
   const [viewMode, setViewMode] = useState<ProjectType>(project.type);
@@ -61,6 +67,37 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
   const [editingVersionId, setEditingVersionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [editorStateToken, setEditorStateToken] = useState(0); // Force re-render for toolbar
+  const [status, setStatus] = useState('connecting');
+
+  // Collaboration Provider
+  const provider = useMemo(() => {
+    return new HocuspocusProvider({
+      url: `ws://${window.location.host}/collaboration`,
+      name: `project-${project.id}`,
+      onStatus: (event) => {
+        setStatus(event.status);
+      },
+    });
+  }, [project.id]);
+
+  // Cleanup provider on unmount
+  useEffect(() => {
+    return () => {
+      provider.destroy();
+    };
+  }, [provider]);
+
+  // Force text mode on mobile
+  useEffect(() => {
+    const checkMobile = () => {
+      if (window.innerWidth < 768 && viewMode === 'both') {
+        setViewMode('text');
+      }
+    };
+    checkMobile();
+    window.addEventListener('resize', checkMobile);
+    return () => window.removeEventListener('resize', checkMobile);
+  }, [viewMode]);
 
   const [versionToDelete, setVersionToDelete] = useState<string | null>(null);
 
@@ -121,6 +158,17 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
     extensions: [
       StarterKit.configure({
         codeBlock: false,
+        history: false, // Disable default history for collaboration
+      }),
+      Collaboration.configure({
+        document: provider.document,
+      }),
+      CollaborationCursor.configure({
+        provider: provider,
+        user: {
+          name: user?.email || 'Anonymous',
+          color: '#' + Math.floor(Math.random()*16777215).toString(16),
+        },
       }),
       Image,
       CustomTable.configure({
@@ -149,7 +197,7 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
     },
     editorProps: {
       attributes: {
-        class: 'prose prose-invert max-w-none focus:outline-none min-h-full p-8',
+        class: 'prose prose-invert max-w-none focus:outline-none min-h-full p-4 md:p-8',
       },
     },
   });
@@ -368,12 +416,69 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
     }
   };
 
+  // Swipe handlers
+  const [touchStart, setTouchStart] = useState<number | null>(null);
+  const [touchEnd, setTouchEnd] = useState<number | null>(null);
+
+  const minSwipeDistance = 50;
+
+  const onTouchStart = (e: React.TouchEvent) => {
+    setTouchEnd(null);
+    setTouchStart(e.targetTouches[0].clientX);
+  };
+
+  const onTouchMove = (e: React.TouchEvent) => {
+    setTouchEnd(e.targetTouches[0].clientX);
+  };
+
+  const onTouchEnd = () => {
+    if (!touchStart || !touchEnd) return;
+    const distance = touchStart - touchEnd;
+    const isLeftSwipe = distance > minSwipeDistance;
+    const isRightSwipe = distance < -minSwipeDistance;
+
+    // Only swipe on mobile
+    if (window.innerWidth >= 768) return;
+
+    if (isLeftSwipe && viewMode === 'text') {
+      setViewMode('mindmap');
+    }
+    if (isRightSwipe && viewMode === 'mindmap') {
+      setViewMode('text');
+    }
+  };
+
   if (!editor) {
     return null;
   }
 
+  // Check for selection to show mobile toolbar
+  const hasSelection = editor && !editor.state.selection.empty;
+
   return (
-    <div className="h-screen flex flex-col bg-black text-white overflow-hidden">
+    <div className="h-screen flex flex-col bg-black text-white overflow-hidden relative">
+      {/* Mobile Formatting Bar (Fixed at bottom) */}
+      {hasSelection && (
+        <div className="md:hidden absolute bottom-4 left-1/2 -translate-x-1/2 z-50 flex items-center gap-1 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl p-2 animate-in slide-in-from-bottom-2 fade-in">
+          <button onClick={() => editor.chain().focus().toggleBold().run()} className={`p-2 rounded hover:bg-zinc-800 ${editor.isActive('bold') ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Жирный">
+            <Bold size={20} />
+          </button>
+          <button onClick={() => editor.chain().focus().toggleItalic().run()} className={`p-2 rounded hover:bg-zinc-800 ${editor.isActive('italic') ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Курсив">
+            <Italic size={20} />
+          </button>
+          <div className="w-px h-6 bg-white/10 mx-1" />
+          <button onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={`p-2 rounded hover:bg-zinc-800 ${editor.isActive('heading', { level: 1 }) ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Заголовок 1">
+            <Heading1 size={20} />
+          </button>
+          <button onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={`p-2 rounded hover:bg-zinc-800 ${editor.isActive('heading', { level: 2 }) ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Заголовок 2">
+            <Heading2 size={20} />
+          </button>
+          <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={`p-2 rounded hover:bg-zinc-800 ${editor.isActive('heading', { level: 3 }) ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Заголовок 3">
+            <Heading3 size={20} />
+          </button>
+        </div>
+      )}
+
       <input 
         type="file" 
         ref={fileInputRef} 
@@ -382,8 +487,8 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
         onChange={handleImageUpload}
       />
 
-      <header className="h-14 border-b border-white/10 flex items-center justify-between px-4 bg-zinc-950 shrink-0 z-20">
-        <div className="flex items-center gap-4">
+      <header className="h-14 border-b border-white/10 flex items-center px-2 md:px-4 bg-zinc-950 shrink-0 z-20 overflow-x-auto gap-2 md:gap-4 [&::-webkit-scrollbar]:hidden">
+        <div className="flex items-center gap-2 md:gap-4 shrink-0">
           <button 
             onClick={handleBack}
             className="p-2 hover:bg-zinc-900 rounded-lg text-zinc-400 hover:text-white transition-colors"
@@ -394,30 +499,34 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
             type="text"
             value={title}
             onChange={(e) => setTitle(e.target.value)}
-            className="bg-transparent border-none outline-none font-medium text-sm w-64 placeholder-zinc-600"
+            className="bg-transparent border-none outline-none font-medium text-sm w-32 md:w-64 placeholder-zinc-600 hidden md:block"
             placeholder="Без названия"
           />
         </div>
         
-        <div className="flex items-center gap-1 bg-zinc-900/50 p-1 rounded-lg border border-white/5">
-          {/* ... existing toolbar buttons ... */}
-          <button onClick={() => editor.chain().focus().toggleBold().run()} className={`p-1.5 rounded hover:bg-zinc-800 ${editor.isActive('bold') ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Жирный">
-            <Bold size={16} />
-          </button>
-          <button onClick={() => editor.chain().focus().toggleItalic().run()} className={`p-1.5 rounded hover:bg-zinc-800 ${editor.isActive('italic') ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Курсив">
-            <Italic size={16} />
-          </button>
-          <div className="w-px h-4 bg-white/10 mx-1" />
-          <button onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={`p-1.5 rounded hover:bg-zinc-800 ${editor.isActive('heading', { level: 1 }) ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Заголовок 1">
-            <Heading1 size={16} />
-          </button>
-          <button onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={`p-1.5 rounded hover:bg-zinc-800 ${editor.isActive('heading', { level: 2 }) ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Заголовок 2">
-            <Heading2 size={16} />
-          </button>
-          <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={`p-1.5 rounded hover:bg-zinc-800 ${editor.isActive('heading', { level: 3 }) ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Заголовок 3">
-            <Heading3 size={16} />
-          </button>
-          <div className="w-px h-4 bg-white/10 mx-1" />
+        <div className="flex items-center gap-1 bg-zinc-900/50 p-1 rounded-lg border border-white/5 shrink-0">
+          {/* Formatting buttons - Hidden on Mobile */}
+          <div className="hidden md:flex items-center gap-1">
+            <button onClick={() => editor.chain().focus().toggleBold().run()} className={`p-1.5 rounded hover:bg-zinc-800 ${editor.isActive('bold') ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Жирный">
+              <Bold size={16} />
+            </button>
+            <button onClick={() => editor.chain().focus().toggleItalic().run()} className={`p-1.5 rounded hover:bg-zinc-800 ${editor.isActive('italic') ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Курсив">
+              <Italic size={16} />
+            </button>
+            <div className="w-px h-4 bg-white/10 mx-1" />
+            <button onClick={() => editor.chain().focus().toggleHeading({ level: 1 }).run()} className={`p-1.5 rounded hover:bg-zinc-800 ${editor.isActive('heading', { level: 1 }) ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Заголовок 1">
+              <Heading1 size={16} />
+            </button>
+            <button onClick={() => editor.chain().focus().toggleHeading({ level: 2 }).run()} className={`p-1.5 rounded hover:bg-zinc-800 ${editor.isActive('heading', { level: 2 }) ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Заголовок 2">
+              <Heading2 size={16} />
+            </button>
+            <button onClick={() => editor.chain().focus().toggleHeading({ level: 3 }).run()} className={`p-1.5 rounded hover:bg-zinc-800 ${editor.isActive('heading', { level: 3 }) ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`} title="Заголовок 3">
+              <Heading3 size={16} />
+            </button>
+            <div className="w-px h-4 bg-white/10 mx-1" />
+          </div>
+
+          {/* Insert buttons - Always visible */}
           <button onClick={() => fileInputRef.current?.click()} className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white" title="Изображение">
             <ImageIcon size={16} />
           </button>
@@ -531,46 +640,89 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
            </button>
            <button 
              onClick={() => setShareModalOpen(true)}
-             className="flex items-center gap-2 px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors ml-2"
+             className="flex items-center gap-2 px-2 md:px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors ml-2"
              title="Опубликовать"
            >
              <UploadCloud size={16} />
-             <span>Опубликовать</span>
+             <span className="hidden md:inline">Опубликовать</span>
            </button>
-           <div className="w-px h-4 bg-white/10 mx-1" />
-           <button 
-             onClick={() => setViewMode('text')}
-             className={`p-1.5 rounded transition-colors ${viewMode === 'text' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'}`}
-             title="Только текст"
-           >
-             <FileText size={16} />
-           </button>
-           <button 
-             onClick={() => setViewMode('both')}
-             className={`p-1.5 rounded transition-colors ${viewMode === 'both' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'}`}
-             title="Разделенный вид"
-           >
-             <LayoutPanelLeft size={16} />
-           </button>
-           <button 
-             onClick={() => setViewMode('mindmap')}
-             className={`p-1.5 rounded transition-colors ${viewMode === 'mindmap' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'}`}
-             title="Только Mindmap"
-           >
-             <Network size={16} />
-           </button>
+           
+           {/* View Switcher - Hidden on Mobile (use swipe instead) */}
+           <div className="hidden md:flex items-center">
+             <div className="w-px h-4 bg-white/10 mx-1" />
+             <button 
+               onClick={() => setViewMode('text')}
+               className={`p-1.5 rounded transition-colors ${viewMode === 'text' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'}`}
+               title="Только текст"
+             >
+               <FileText size={16} />
+             </button>
+             <button 
+               onClick={() => setViewMode('both')}
+               className={`hidden md:block p-1.5 rounded transition-colors ${viewMode === 'both' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'}`}
+               title="Разделенный вид"
+             >
+               <LayoutPanelLeft size={16} />
+             </button>
+             <button 
+               onClick={() => setViewMode('mindmap')}
+               className={`p-1.5 rounded transition-colors ${viewMode === 'mindmap' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'}`}
+               title="Только Mindmap"
+             >
+               <Network size={16} />
+             </button>
+           </div>
         </div>
       </header>
 
-      <div className="flex-1 flex overflow-hidden">
+      {/* Mobile Bottom Navigation */}
+      <div className="md:hidden absolute bottom-0 left-0 right-0 bg-zinc-950 border-t border-white/10 flex justify-around items-center h-12 z-40">
+        <button 
+          onClick={() => setViewMode('text')}
+          className={`flex flex-col items-center justify-center w-full h-full ${viewMode === 'text' ? 'text-white' : 'text-zinc-500'}`}
+        >
+          <FileText size={18} />
+          <span className="text-[10px] mt-0.5">Текст</span>
+        </button>
+        <button 
+          onClick={() => setViewMode('mindmap')}
+          className={`flex flex-col items-center justify-center w-full h-full ${viewMode === 'mindmap' ? 'text-white' : 'text-zinc-500'}`}
+        >
+          <Network size={18} />
+          <span className="text-[10px] mt-0.5">Mindmap</span>
+        </button>
+      </div>
+
+      {/* Mobile Mindmap Controls */}
+      {viewMode === 'mindmap' && (
+        <div className="md:hidden absolute bottom-14 right-4 z-50 flex flex-col gap-2">
+          <button 
+            onClick={() => {
+              // Add child node to selected or root
+              handleNodeAdd('root', 'New Node');
+            }}
+            className="p-3 bg-blue-600 text-white rounded-full shadow-lg hover:bg-blue-500"
+            title="Добавить узел"
+          >
+            <Plus size={20} />
+          </button>
+        </div>
+      )}
+
+      <div 
+        className="flex-1 flex overflow-hidden flex-col md:flex-row touch-pan-y pb-12 md:pb-0"
+        onTouchStart={onTouchStart}
+        onTouchMove={onTouchMove}
+        onTouchEnd={onTouchEnd}
+      >
         {(viewMode === 'text' || viewMode === 'both') && (
-          <div className={`h-full flex flex-col ${viewMode === 'both' ? 'w-1/2 border-r border-white/10' : 'w-full max-w-3xl mx-auto'} overflow-y-auto`}>
+          <div className={`h-full flex flex-col ${viewMode === 'both' ? 'w-full md:w-1/2 md:border-r border-white/10' : 'w-full max-w-3xl mx-auto'} overflow-y-auto`}>
             <EditorContent editor={editor} className="h-full" />
           </div>
         )}
 
         {(viewMode === 'mindmap' || viewMode === 'both') && (
-          <div className={`h-full ${viewMode === 'both' ? 'w-1/2' : 'w-full'}`}>
+          <div className={`h-full ${viewMode === 'both' ? 'hidden md:block md:w-1/2' : 'w-full'}`}>
             <MindmapGraph 
               data={headingTree} 
               onNodeClick={handleNodeClick} 

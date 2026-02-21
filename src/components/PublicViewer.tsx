@@ -111,10 +111,10 @@ export default function PublicViewer() {
 
   return (
     <div className="min-h-screen bg-black text-white font-sans selection:bg-blue-500/30 selection:text-white flex flex-col">
-      <div className={`flex-1 ${project.publicShowMindmap ? 'flex' : 'max-w-3xl mx-auto px-8 py-16 w-full'}`}>
+      <div className={`flex-1 ${project.publicShowMindmap ? 'flex flex-col md:flex-row' : 'max-w-3xl mx-auto px-4 md:px-8 py-8 md:py-16 w-full'}`}>
         
         {/* Content Area */}
-        <div className={`${project.publicShowMindmap ? 'w-1/2 border-r border-white/10 h-screen overflow-y-auto px-8 py-16' : ''}`}>
+        <div className={`${project.publicShowMindmap ? 'w-full md:w-1/2 md:border-r border-white/10 h-[50vh] md:h-screen overflow-y-auto px-4 md:px-8 py-8 md:py-16' : ''}`}>
             <header className="mb-12 text-center">
                 <h1 className="text-4xl font-bold tracking-tight mb-4 text-white">{project.title}</h1>
                 <div className="text-sm text-zinc-500">
@@ -133,7 +133,7 @@ export default function PublicViewer() {
 
         {/* Mindmap Area */}
         {project.publicShowMindmap && headingTree && (
-            <div className="w-1/2 h-screen">
+            <div className="w-full md:w-1/2 h-[50vh] md:h-screen border-t md:border-t-0 border-white/10">
                 <MindmapGraph 
                     data={headingTree} 
                     onNodeClick={(lineIndex) => {
