@@ -2,7 +2,7 @@ import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react'
 import { ArrowLeft, Bold, Italic, Underline, Heading1, Heading2, Heading3, LayoutPanelLeft, FileText, Network, Image as ImageIcon, Table as TableIcon, Eye, EyeOff, Plus, Trash2, Columns, Rows, ArrowRight, ArrowDown, Lock, Unlock, Maximize, BarChart as BarChartIcon, Code as CodeIcon, Languages, Share2, History, UploadCloud, Edit2, X, Check } from 'lucide-react';
 import { Project, ProjectType, ProjectVersion } from '../types';
 import { database } from '../lib/firebase';
-import { ref, onValue, get, remove, update } from 'firebase/database';
+import { ref, onValue, get, remove, update, set } from 'firebase/database';
 import MindmapGraph from './MindmapGraph';
 import { parseMarkdownHeadings } from '../utils/markdownParser';
 import { useEditor, EditorContent } from '@tiptap/react';
@@ -14,10 +14,6 @@ import { TableCell } from '@tiptap/extension-table-cell';
 import { TableHeader } from '@tiptap/extension-table-header';
 import { Markdown } from 'tiptap-markdown';
 import BubbleMenuExtension from '@tiptap/extension-bubble-menu';
-import Collaboration from '@tiptap/extension-collaboration';
-import CollaborationCursor from '@tiptap/extension-collaboration-cursor';
-import * as Y from 'yjs';
-import { HocuspocusProvider } from '@hocuspocus/provider';
 import BarChartExtension from './extensions/BarChartExtension';
 import CodeBlockExtension from './extensions/CodeBlockExtension';
 import TranslatorModal from './TranslatorModal';
@@ -36,8 +32,8 @@ const CustomTable = Table.extend({
         renderHTML: attributes => {
           return {
             'data-layout-mode': attributes.layoutMode,
-            style: attributes.layoutMode === 'fixed' 
-              ? 'table-layout: fixed; width: 100%' 
+            style: attributes.layoutMode === 'fixed'
+              ? 'table-layout: fixed; width: 100%'
               : 'table-layout: auto; width: auto; min-width: 100%',
           }
         },
@@ -66,26 +62,99 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
   const [versionToRestore, setVersionToRestore] = useState<ProjectVersion | null>(null);
   const [editingVersionId, setEditingVersionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
-  const [editorStateToken, setEditorStateToken] = useState(0); // Force re-render for toolbar
-  const [status, setStatus] = useState('connecting');
+  const [editorStateToken, setEditorStateToken] = useState(0);
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'idle'>('idle');
+  const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const initialLoadRef = useRef(true);
+  const [remoteCursors, setRemoteCursors] = useState<Record<string, { name: string; color: string; line: number; pos: number }>>({});
 
-  // Collaboration Provider
-  const provider = useMemo(() => {
-    return new HocuspocusProvider({
-      url: `ws://${window.location.host}/collaboration`,
-      name: `project-${project.id}`,
-      onStatus: (event) => {
-        setStatus(event.status);
-      },
-    });
-  }, [project.id]);
 
-  // Cleanup provider on unmount
+  // Stabilized Save: 50ms debounce batches fast typing and prevents race conditions
   useEffect(() => {
+    if (initialLoadRef.current) {
+      initialLoadRef.current = false;
+      return;
+    }
+
+    if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
+
+    saveTimeoutRef.current = setTimeout(() => {
+      if (!user) return;
+      setSaveStatus('saving');
+      onSave({
+        ...project,
+        title,
+        content,
+        type: viewMode,
+        lastModified: Date.now(),
+        lastModifiedBy: user.uid,
+      });
+      setSaveStatus('saved');
+      setTimeout(() => setSaveStatus('idle'), 2000);
+    }, 50);
+
     return () => {
-      provider.destroy();
+      if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
-  }, [provider]);
+  }, [content, title, user]);
+
+  // Firebase Realtime Database listener — sync remote changes
+  useEffect(() => {
+    const projectRef = ref(database, `projects/${project.id}`);
+    const unsubscribe = onValue(projectRef, (snapshot) => {
+      const data = snapshot.val();
+      if (!data || !user) return;
+
+      // Robust Sync: skip updates triggered by ourselves
+      if (data.lastModifiedBy === user.uid) {
+        return;
+      }
+
+      // Update title if changed remotely
+      if (data.title && data.title !== title) {
+        setTitle(data.title);
+      }
+
+      // Update content if changed remotely
+      if (data.content !== undefined && data.content !== content) {
+        setContent(data.content);
+        if (editor) {
+          const currentMarkdown = (editor.storage as any)?.markdown?.getMarkdown?.();
+          if (data.content !== currentMarkdown) {
+            editor.commands.setContent(data.content, { emitUpdate: false });
+          }
+        }
+      }
+    });
+
+    return () => unsubscribe();
+  }, [project.id, user]);
+
+  // Track and display remote cursors via Firebase
+  useEffect(() => {
+    if (!user) return;
+    const cursorsRef = ref(database, `cursors/${project.id}`);
+    const unsubscribe = onValue(cursorsRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const others: Record<string, { name: string; color: string; line: number; pos: number }> = {};
+        for (const [uid, cursor] of Object.entries(data)) {
+          if (uid !== user.uid) {
+            others[uid] = cursor as { name: string; color: string; line: number; pos: number };
+          }
+        }
+        setRemoteCursors(others);
+      } else {
+        setRemoteCursors({});
+      }
+    });
+
+    // Cleanup own cursor on unmount
+    return () => {
+      unsubscribe();
+      set(ref(database, `cursors/${project.id}/${user.uid}`), null);
+    };
+  }, [project.id, user]);
 
   // Force text mode on mobile
   useEffect(() => {
@@ -109,7 +178,7 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
 
   const confirmDelete = async () => {
     if (!versionToDelete) return;
-    
+
     try {
       await remove(ref(database, `project_versions/${project.id}/${versionToDelete}`));
       // Update local state
@@ -158,17 +227,6 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
     extensions: [
       StarterKit.configure({
         codeBlock: false,
-        history: false, // Disable default history for collaboration
-      }),
-      Collaboration.configure({
-        document: provider.document,
-      }),
-      CollaborationCursor.configure({
-        provider: provider,
-        user: {
-          name: user?.email || 'Anonymous',
-          color: '#' + Math.floor(Math.random()*16777215).toString(16),
-        },
       }),
       Image,
       CustomTable.configure({
@@ -192,8 +250,26 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
       const markdown = editor.storage.markdown.getMarkdown();
       setContent(markdown);
     },
-    onTransaction: () => {
+    onTransaction: ({ editor: e }) => {
       setEditorStateToken(prev => prev + 1);
+      // Write cursor position to Firebase for remote users
+      if (user && e) {
+        const pos = e.state.selection.anchor;
+        const resolved = e.state.doc.resolve(pos);
+        // Calculate approximate line number from document position
+        let line = 0;
+        e.state.doc.nodesBetween(0, pos, (node) => {
+          if (node.isBlock) line++;
+          return true;
+        });
+        set(ref(database, `cursors/${project.id}/${user.uid}`), {
+          name: user.email || user.displayName || 'Гость',
+          color: '#' + user.uid.slice(0, 6),
+          line: line,
+          pos: pos,
+          timestamp: Date.now(),
+        });
+      }
     },
     editorProps: {
       attributes: {
@@ -205,9 +281,9 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
   // Update editor content if project content changes externally (e.g. from mindmap)
   useEffect(() => {
     if (editor && content !== editor.storage.markdown.getMarkdown()) {
-       if (Math.abs(content.length - editor.storage.markdown.getMarkdown().length) > 5) {
-         editor.commands.setContent(content);
-       }
+      if (Math.abs(content.length - editor.storage.markdown.getMarkdown().length) > 5) {
+        editor.commands.setContent(content);
+      }
     }
   }, [content, editor]);
 
@@ -232,20 +308,20 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
 
   const confirmRestore = () => {
     if (!versionToRestore) return;
-    
+
     const version = versionToRestore;
     console.log("Restoring version content:", version.content);
-    
+
     setContent(version.content);
     setTitle(version.title);
-    
+
     if (editor) {
       editor.commands.setContent(version.content);
     }
-    
+
     setVersionToRestore(null);
     setHistoryModalOpen(false);
-    
+
     // Save immediately
     onSave({
       ...project,
@@ -268,7 +344,7 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
   };
 
   const handleUpdateProject = (updates: Partial<Project>) => {
-      onSave({ ...project, ...updates });
+    onSave({ ...project, ...updates });
   };
 
   const handleImageUpload = async (event: React.ChangeEvent<HTMLInputElement>) => {
@@ -318,10 +394,10 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
       editor.state.doc.descendants((node, pos) => {
         if (foundPos !== -1) return false;
         if (node.type.name === 'heading' && node.attrs.level === targetNode.level) {
-           if (node.textContent === targetNode.text) {
-             foundPos = pos;
-             return false;
-           }
+          if (node.textContent === targetNode.text) {
+            foundPos = pos;
+            return false;
+          }
         }
         return true;
       });
@@ -329,10 +405,10 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
       if (foundPos !== -1) {
         editor.chain().focus().setTextSelection(foundPos).scrollIntoView().run();
       } else {
-         editor.chain().focus().run();
+        editor.chain().focus().run();
       }
     } else {
-        editor.chain().focus().run();
+      editor.chain().focus().run();
     }
   }, [editor, headingTree]);
 
@@ -353,30 +429,30 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
     const hashes = '#'.repeat(Math.min(newLevel, 6));
 
     let insertIndex = content.length;
-    
+
     if (parentId !== 'root') {
-       const lines = content.split('\n');
-       const parentLineIndex = parentNode.line;
-       for (let i = parentLineIndex + 1; i < lines.length; i++) {
-           const match = lines[i].match(/^(#{1,6})\s/);
-           if (match) {
-               const level = match[1].length;
-               if (level <= parentNode.level) {
-                   insertIndex = lines.slice(0, i).join('\n').length + 1;
-                   break;
-               }
-           }
-       }
+      const lines = content.split('\n');
+      const parentLineIndex = parentNode.line;
+      for (let i = parentLineIndex + 1; i < lines.length; i++) {
+        const match = lines[i].match(/^(#{1,6})\s/);
+        if (match) {
+          const level = match[1].length;
+          if (level <= parentNode.level) {
+            insertIndex = lines.slice(0, i).join('\n').length + 1;
+            break;
+          }
+        }
+      }
     }
 
     const before = content.substring(0, insertIndex);
     const after = content.substring(insertIndex);
     const toInsert = (before.endsWith('\n') ? '' : '\n') + `${hashes} ${text}` + (after.startsWith('\n') ? '' : '\n');
-    
+
     const newMarkdown = before + toInsert + after;
     setContent(newMarkdown);
     if (editor) {
-        editor.commands.setContent(newMarkdown);
+      editor.commands.setContent(newMarkdown);
     }
   };
 
@@ -398,21 +474,21 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
     let endLine = lines.length;
 
     for (let i = startLine + 1; i < lines.length; i++) {
-        const match = lines[i].match(/^(#{1,6})\s/);
-        if (match) {
-            const level = match[1].length;
-            if (level <= nodeToDelete.level) {
-                endLine = i;
-                break;
-            }
+      const match = lines[i].match(/^(#{1,6})\s/);
+      if (match) {
+        const level = match[1].length;
+        if (level <= nodeToDelete.level) {
+          endLine = i;
+          break;
         }
+      }
     }
 
     const newLines = [...lines.slice(0, startLine), ...lines.slice(endLine)];
     const newMarkdown = newLines.join('\n');
     setContent(newMarkdown);
     if (editor) {
-        editor.commands.setContent(newMarkdown);
+      editor.commands.setContent(newMarkdown);
     }
   };
 
@@ -479,17 +555,17 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
         </div>
       )}
 
-      <input 
-        type="file" 
-        ref={fileInputRef} 
-        className="hidden" 
-        accept="image/*" 
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        accept="image/*"
         onChange={handleImageUpload}
       />
 
       <header className="h-14 border-b border-white/10 flex items-center px-2 md:px-4 bg-zinc-950 shrink-0 z-20 overflow-x-auto gap-2 md:gap-4 [&::-webkit-scrollbar]:hidden">
         <div className="flex items-center gap-2 md:gap-4 shrink-0">
-          <button 
+          <button
             onClick={handleBack}
             className="p-2 hover:bg-zinc-900 rounded-lg text-zinc-400 hover:text-white transition-colors"
           >
@@ -502,8 +578,13 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
             className="bg-transparent border-none outline-none font-medium text-sm w-32 md:w-64 placeholder-zinc-600 hidden md:block"
             placeholder="Без названия"
           />
+          {/* Auto-save status indicator */}
+          <span className="text-xs text-zinc-500 hidden md:inline-flex items-center gap-1 ml-2">
+            {saveStatus === 'saving' && <><span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" /> Сохранение...</>}
+            {saveStatus === 'saved' && <><span className="w-1.5 h-1.5 rounded-full bg-green-400" /> Сохранено</>}
+          </span>
         </div>
-        
+
         <div className="flex items-center gap-1 bg-zinc-900/50 p-1 rounded-lg border border-white/5 shrink-0">
           {/* Formatting buttons - Hidden on Mobile */}
           <div className="hidden md:flex items-center gap-1">
@@ -540,13 +621,13 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
             <CodeIcon size={16} />
           </button>
           <div className="w-px h-4 bg-white/10 mx-1" />
-          <button 
+          <button
             onClick={() => {
               const selection = editor.state.selection;
               const text = selection.empty ? '' : editor.state.doc.textBetween(selection.from, selection.to, ' ');
               setTranslatorModal({ isOpen: true, text });
-            }} 
-            className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white" 
+            }}
+            className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white"
             title="Переводчик"
           >
             <Languages size={16} />
@@ -556,73 +637,73 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
         {/* Table Controls (Visible when table is active) */}
         {editor && editor.isActive('table') && (
           <div className="flex items-center gap-1 bg-zinc-900/50 p-1 rounded-lg border border-white/5 animate-in fade-in slide-in-from-top-2 absolute left-1/2 -translate-x-1/2 top-14 mt-2 z-30">
-             {/* ... table controls ... */}
-             <button 
-              onClick={() => editor.chain().focus().addColumnBefore().run()} 
-              className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white" 
+            {/* ... table controls ... */}
+            <button
+              onClick={() => editor.chain().focus().addColumnBefore().run()}
+              className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white"
               title="Добавить столбец слева"
             >
               <Columns size={16} className="rotate-180" />
             </button>
-            <button 
-              onClick={() => editor.chain().focus().addColumnAfter().run()} 
-              className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white" 
+            <button
+              onClick={() => editor.chain().focus().addColumnAfter().run()}
+              className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white"
               title="Добавить столбец справа"
             >
               <Columns size={16} />
             </button>
-            <button 
-              onClick={() => editor.chain().focus().deleteColumn().run()} 
-              className="p-1.5 hover:bg-zinc-800 rounded text-red-400 hover:text-red-300" 
+            <button
+              onClick={() => editor.chain().focus().deleteColumn().run()}
+              className="p-1.5 hover:bg-zinc-800 rounded text-red-400 hover:text-red-300"
               title="Удалить столбец"
             >
               <Trash2 size={16} />
             </button>
             <div className="w-px h-4 bg-white/10 mx-1" />
-            <button 
-              onClick={() => editor.chain().focus().addRowBefore().run()} 
-              className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white" 
+            <button
+              onClick={() => editor.chain().focus().addRowBefore().run()}
+              className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white"
               title="Добавить строку сверху"
             >
               <Rows size={16} className="rotate-180" />
             </button>
-            <button 
-              onClick={() => editor.chain().focus().addRowAfter().run()} 
-              className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white" 
+            <button
+              onClick={() => editor.chain().focus().addRowAfter().run()}
+              className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white"
               title="Добавить строку снизу"
             >
               <Rows size={16} />
             </button>
-            <button 
-              onClick={() => editor.chain().focus().deleteRow().run()} 
-              className="p-1.5 hover:bg-zinc-800 rounded text-red-400 hover:text-red-300" 
+            <button
+              onClick={() => editor.chain().focus().deleteRow().run()}
+              className="p-1.5 hover:bg-zinc-800 rounded text-red-400 hover:text-red-300"
               title="Удалить строку"
             >
               <Trash2 size={16} />
             </button>
             <div className="w-px h-4 bg-white/10 mx-1" />
-            <button 
-              onClick={() => editor.chain().focus().deleteTable().run()} 
-              className="p-1.5 hover:bg-zinc-800 rounded text-red-400 hover:text-red-300" 
+            <button
+              onClick={() => editor.chain().focus().deleteTable().run()}
+              className="p-1.5 hover:bg-zinc-800 rounded text-red-400 hover:text-red-300"
               title="Удалить таблицу"
             >
               <Trash2 size={16} />
             </button>
             <div className="w-px h-4 bg-white/10 mx-1" />
-             <button 
+            <button
               onClick={() => {
                 const currentMode = editor.getAttributes('table').layoutMode;
                 const newMode = currentMode === 'fixed' ? 'auto' : 'fixed';
                 editor.chain().focus().updateAttributes('table', { layoutMode: newMode }).run();
-              }} 
+              }}
               className={`p-1.5 rounded hover:bg-zinc-800 ${editor.getAttributes('table').layoutMode === 'fixed' ? 'bg-zinc-700 text-white' : 'text-zinc-400'}`}
               title={editor.getAttributes('table').layoutMode === 'fixed' ? "Режим: Фиксированная ширина (Locked)" : "Режим: Авто-ширина (Unlocked)"}
             >
               {editor.getAttributes('table').layoutMode === 'fixed' ? <Lock size={16} /> : <Unlock size={16} />}
             </button>
-            <button 
-              onClick={() => editor.chain().focus().fixTables().run()} 
-              className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white" 
+            <button
+              onClick={() => editor.chain().focus().fixTables().run()}
+              className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white"
               title="Выровнять ширину столбцов"
             >
               <Maximize size={16} />
@@ -631,60 +712,60 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
         )}
 
         <div className="flex items-center gap-2 bg-zinc-900/50 p-1 rounded-lg border border-white/5">
-           <button 
-             onClick={() => setHistoryModalOpen(true)}
-             className="p-1.5 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
-             title="История версий"
-           >
-             <History size={16} />
-           </button>
-           <button 
-             onClick={() => setShareModalOpen(true)}
-             className="flex items-center gap-2 px-2 md:px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors ml-2"
-             title="Опубликовать"
-           >
-             <UploadCloud size={16} />
-             <span className="hidden md:inline">Опубликовать</span>
-           </button>
-           
-           {/* View Switcher - Hidden on Mobile (use swipe instead) */}
-           <div className="hidden md:flex items-center">
-             <div className="w-px h-4 bg-white/10 mx-1" />
-             <button 
-               onClick={() => setViewMode('text')}
-               className={`p-1.5 rounded transition-colors ${viewMode === 'text' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'}`}
-               title="Только текст"
-             >
-               <FileText size={16} />
-             </button>
-             <button 
-               onClick={() => setViewMode('both')}
-               className={`hidden md:block p-1.5 rounded transition-colors ${viewMode === 'both' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'}`}
-               title="Разделенный вид"
-             >
-               <LayoutPanelLeft size={16} />
-             </button>
-             <button 
-               onClick={() => setViewMode('mindmap')}
-               className={`p-1.5 rounded transition-colors ${viewMode === 'mindmap' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'}`}
-               title="Только Mindmap"
-             >
-               <Network size={16} />
-             </button>
-           </div>
+          <button
+            onClick={() => setHistoryModalOpen(true)}
+            className="p-1.5 rounded text-zinc-400 hover:text-white hover:bg-zinc-800 transition-colors"
+            title="История версий"
+          >
+            <History size={16} />
+          </button>
+          <button
+            onClick={() => setShareModalOpen(true)}
+            className="flex items-center gap-2 px-2 md:px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors ml-2"
+            title="Опубликовать"
+          >
+            <UploadCloud size={16} />
+            <span className="hidden md:inline">Опубликовать</span>
+          </button>
+
+          {/* View Switcher - Hidden on Mobile (use swipe instead) */}
+          <div className="hidden md:flex items-center">
+            <div className="w-px h-4 bg-white/10 mx-1" />
+            <button
+              onClick={() => setViewMode('text')}
+              className={`p-1.5 rounded transition-colors ${viewMode === 'text' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'}`}
+              title="Только текст"
+            >
+              <FileText size={16} />
+            </button>
+            <button
+              onClick={() => setViewMode('both')}
+              className={`hidden md:block p-1.5 rounded transition-colors ${viewMode === 'both' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'}`}
+              title="Разделенный вид"
+            >
+              <LayoutPanelLeft size={16} />
+            </button>
+            <button
+              onClick={() => setViewMode('mindmap')}
+              className={`p-1.5 rounded transition-colors ${viewMode === 'mindmap' ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-white hover:bg-zinc-800'}`}
+              title="Только Mindmap"
+            >
+              <Network size={16} />
+            </button>
+          </div>
         </div>
       </header>
 
       {/* Mobile Bottom Navigation */}
       <div className="md:hidden absolute bottom-0 left-0 right-0 bg-zinc-950 border-t border-white/10 flex justify-around items-center h-12 z-40">
-        <button 
+        <button
           onClick={() => setViewMode('text')}
           className={`flex flex-col items-center justify-center w-full h-full ${viewMode === 'text' ? 'text-white' : 'text-zinc-500'}`}
         >
           <FileText size={18} />
           <span className="text-[10px] mt-0.5">Текст</span>
         </button>
-        <button 
+        <button
           onClick={() => setViewMode('mindmap')}
           className={`flex flex-col items-center justify-center w-full h-full ${viewMode === 'mindmap' ? 'text-white' : 'text-zinc-500'}`}
         >
@@ -696,7 +777,7 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
       {/* Mobile Mindmap Controls */}
       {viewMode === 'mindmap' && (
         <div className="md:hidden absolute bottom-14 right-4 z-50 flex flex-col gap-2">
-          <button 
+          <button
             onClick={() => {
               // Add child node to selected or root
               handleNodeAdd('root', 'New Node');
@@ -709,7 +790,7 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
         </div>
       )}
 
-      <div 
+      <div
         className="flex-1 flex overflow-hidden flex-col md:flex-row touch-pan-y pb-12 md:pb-0"
         onTouchStart={onTouchStart}
         onTouchMove={onTouchMove}
@@ -717,15 +798,57 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
       >
         {(viewMode === 'text' || viewMode === 'both') && (
           <div className={`h-full flex flex-col ${viewMode === 'both' ? 'w-full md:w-1/2 md:border-r border-white/10' : 'w-full max-w-3xl mx-auto'} overflow-y-auto`}>
-            <EditorContent editor={editor} className="h-full" />
+            <div className="relative min-h-full">
+              {/* Remote Cursors Overlay - Now inside the relative container that scrolls */}
+              <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden">
+                {Object.entries(remoteCursors).map(([uid, cursorData]) => {
+                  if (!editor) return null;
+                  const cursor = cursorData as { name: string; color: string; line: number; pos: number };
+                  try {
+                    const pos = Math.min(cursor.pos, editor.state.doc.content.size);
+                    const coords = editor.view.coordsAtPos(pos);
+                    if (!coords) return null;
+
+                    const editorBounds = editor.view.dom.getBoundingClientRect();
+                    // Coordinate calculation relative to the editor DOM
+                    const top = coords.top - editorBounds.top;
+                    const left = coords.left - editorBounds.left;
+
+                    return (
+                      <div
+                        key={uid}
+                        className="absolute z-50 pointer-events-none"
+                        style={{ top: `${top}px`, left: `${left}px` }}
+                      >
+                        {/* Blinking vertical cursor line */}
+                        <div
+                          className="w-[2px] h-[1.2em] animate-pulse"
+                          style={{ backgroundColor: cursor.color }}
+                        />
+                        {/* Label badge */}
+                        <div
+                          className="absolute left-0 bottom-full mb-1 px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap text-white font-medium shadow-lg z-50"
+                          style={{ backgroundColor: cursor.color }}
+                        >
+                          {cursor.name}
+                        </div>
+                      </div>
+                    );
+                  } catch (e) {
+                    return null;
+                  }
+                })}
+              </div>
+              <EditorContent editor={editor} className="h-full" />
+            </div>
           </div>
         )}
 
         {(viewMode === 'mindmap' || viewMode === 'both') && (
           <div className={`h-full ${viewMode === 'both' ? 'hidden md:block md:w-1/2' : 'w-full'}`}>
-            <MindmapGraph 
-              data={headingTree} 
-              onNodeClick={handleNodeClick} 
+            <MindmapGraph
+              data={headingTree}
+              onNodeClick={handleNodeClick}
               readOnly={false}
               onNodeAdd={handleNodeAdd}
               onNodeDelete={handleNodeDelete}
@@ -737,17 +860,17 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
       {/* Table Creation Modal */}
       {tableModal.isOpen && (
         <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[60]" onClick={() => setTableModal({ ...tableModal, isOpen: false })}>
-          <div 
-            className="bg-zinc-900 p-6 rounded-xl border border-white/10 w-80 shadow-2xl" 
+          <div
+            className="bg-zinc-900 p-6 rounded-xl border border-white/10 w-80 shadow-2xl"
             onClick={e => e.stopPropagation()}
           >
             <h3 className="text-lg font-medium mb-4 text-white">Вставить таблицу</h3>
-            
+
             <div className="space-y-4 mb-6">
               <div>
                 <label className="block text-sm text-zinc-400 mb-1">Строки</label>
-                <input 
-                  type="number" 
+                <input
+                  type="number"
                   min="1"
                   max="20"
                   className="w-full bg-zinc-950 border border-white/10 rounded p-2 outline-none focus:border-white/30 text-white"
@@ -757,8 +880,8 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
               </div>
               <div>
                 <label className="block text-sm text-zinc-400 mb-1">Столбцы</label>
-                <input 
-                  type="number" 
+                <input
+                  type="number"
                   min="1"
                   max="10"
                   className="w-full bg-zinc-950 border border-white/10 rounded p-2 outline-none focus:border-white/30 text-white"
@@ -769,14 +892,14 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
             </div>
 
             <div className="flex justify-end gap-2">
-              <button 
-                onClick={() => setTableModal({ ...tableModal, isOpen: false })} 
+              <button
+                onClick={() => setTableModal({ ...tableModal, isOpen: false })}
                 className="px-3 py-1.5 text-sm text-zinc-400 hover:text-white transition-colors"
               >
                 Отмена
               </button>
-              <button 
-                onClick={confirmInsertTable} 
+              <button
+                onClick={confirmInsertTable}
                 className="px-3 py-1.5 text-sm bg-white text-black rounded hover:bg-zinc-200 font-medium transition-colors"
               >
                 Вставить
@@ -786,29 +909,29 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
         </div>
       )}
 
-      <TranslatorModal 
+      <TranslatorModal
         isOpen={translatorModal.isOpen}
         onClose={() => setTranslatorModal({ ...translatorModal, isOpen: false })}
         initialText={translatorModal.text}
         onReplace={(text) => {
-            if (editor) {
-                editor.chain().focus().insertContent(text).run();
-            }
+          if (editor) {
+            editor.chain().focus().insertContent(text).run();
+          }
         }}
       />
 
       {/* History Modal */}
       {historyModalOpen && (
         <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[60]" onClick={() => setHistoryModalOpen(false)}>
-          <div 
-            className="bg-zinc-900 p-6 rounded-xl border border-white/10 w-[500px] shadow-2xl max-h-[80vh] flex flex-col" 
+          <div
+            className="bg-zinc-900 p-6 rounded-xl border border-white/10 w-[500px] shadow-2xl max-h-[80vh] flex flex-col"
             onClick={e => e.stopPropagation()}
           >
             <h3 className="text-lg font-medium mb-4 text-white flex items-center gap-2">
               <History size={20} />
               История версий
             </h3>
-            
+
             <div className="flex-1 overflow-y-auto space-y-2 mb-4 pr-2">
               {versions.length === 0 ? (
                 <p className="text-zinc-500 text-center py-8">Нет сохраненных версий</p>
@@ -817,11 +940,11 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
                   <div key={version.id} className="flex items-center justify-between p-3 bg-zinc-950/50 rounded-lg border border-white/5 hover:border-white/20 transition-colors group">
                     <div className="flex-1 mr-4">
                       <div className="font-medium text-sm text-white mb-0.5">{new Date(version.timestamp).toLocaleString()}</div>
-                      
+
                       {editingVersionId === version.id ? (
                         <div className="flex items-center gap-2">
-                          <input 
-                            type="text" 
+                          <input
+                            type="text"
                             value={editingTitle}
                             onChange={(e) => setEditingTitle(e.target.value)}
                             className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-white outline-none w-full"
@@ -839,15 +962,15 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
                         </div>
                       )}
                     </div>
-                    
+
                     <div className="flex items-center gap-2">
-                      <button 
+                      <button
                         onClick={() => handleRestoreClick(version)}
                         className="px-3 py-1.5 text-xs bg-zinc-800 hover:bg-zinc-700 text-white rounded transition-colors"
                       >
                         Восстановить
                       </button>
-                      <button 
+                      <button
                         onClick={() => handleDeleteClick(version.id)}
                         className="p-1.5 text-zinc-500 hover:text-red-400 transition-colors"
                         title="Удалить версию"
@@ -861,8 +984,8 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
             </div>
 
             <div className="flex justify-end pt-4 border-t border-white/10">
-              <button 
-                onClick={() => setHistoryModalOpen(false)} 
+              <button
+                onClick={() => setHistoryModalOpen(false)}
                 className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors"
               >
                 Закрыть
@@ -875,26 +998,26 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
       {/* Restore Confirmation Modal */}
       {versionToRestore && (
         <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[70]" onClick={() => setVersionToRestore(null)}>
-          <div 
-            className="bg-zinc-900 p-6 rounded-xl border border-white/10 w-[400px] shadow-2xl" 
+          <div
+            className="bg-zinc-900 p-6 rounded-xl border border-white/10 w-[400px] shadow-2xl"
             onClick={e => e.stopPropagation()}
           >
             <h3 className="text-lg font-medium mb-2 text-white">Подтверждение</h3>
             <p className="text-zinc-400 mb-6 text-sm">
-              Вы уверены, что хотите восстановить версию от <span className="text-white font-medium">{new Date(versionToRestore.timestamp).toLocaleString()}</span>? 
-              <br/><br/>
+              Вы уверены, что хотите восстановить версию от <span className="text-white font-medium">{new Date(versionToRestore.timestamp).toLocaleString()}</span>?
+              <br /><br />
               Текущие несохраненные изменения будут потеряны.
             </p>
-            
+
             <div className="flex justify-end gap-2">
-              <button 
-                onClick={() => setVersionToRestore(null)} 
+              <button
+                onClick={() => setVersionToRestore(null)}
                 className="px-3 py-1.5 text-sm text-zinc-400 hover:text-white transition-colors"
               >
                 Отмена
               </button>
-              <button 
-                onClick={confirmRestore} 
+              <button
+                onClick={confirmRestore}
                 className="px-3 py-1.5 text-sm bg-red-600 hover:bg-red-500 text-white rounded font-medium transition-colors"
               >
                 Восстановить
@@ -907,24 +1030,24 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
       {/* Delete Confirmation Modal */}
       {versionToDelete && (
         <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[70]" onClick={() => setVersionToDelete(null)}>
-          <div 
-            className="bg-zinc-900 p-6 rounded-xl border border-white/10 w-[400px] shadow-2xl" 
+          <div
+            className="bg-zinc-900 p-6 rounded-xl border border-white/10 w-[400px] shadow-2xl"
             onClick={e => e.stopPropagation()}
           >
             <h3 className="text-lg font-medium mb-2 text-white">Удаление версии</h3>
             <p className="text-zinc-400 mb-6 text-sm">
               Вы уверены, что хотите удалить эту версию? Это действие нельзя отменить.
             </p>
-            
+
             <div className="flex justify-end gap-2">
-              <button 
-                onClick={() => setVersionToDelete(null)} 
+              <button
+                onClick={() => setVersionToDelete(null)}
                 className="px-3 py-1.5 text-sm text-zinc-400 hover:text-white transition-colors"
               >
                 Отмена
               </button>
-              <button 
-                onClick={confirmDelete} 
+              <button
+                onClick={confirmDelete}
                 className="px-3 py-1.5 text-sm bg-red-600 hover:bg-red-500 text-white rounded font-medium transition-colors"
               >
                 Удалить
@@ -934,7 +1057,7 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
         </div>
       )}
 
-      <ShareModal 
+      <ShareModal
         isOpen={shareModalOpen}
         onClose={() => setShareModalOpen(false)}
         project={project}

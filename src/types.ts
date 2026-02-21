@@ -14,8 +14,10 @@ export interface Project {
   type: ProjectType;
   content: string;
   lastModified: number;
+  lastModifiedBy?: string;
   ownerId?: string;
   isPublicView?: boolean;
   isPublicEdit?: boolean;
   publicShowMindmap?: boolean;
+  password?: string;
 }

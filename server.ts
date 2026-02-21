@@ -1,31 +1,11 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
-import { Server } from '@hocuspocus/server';
-import expressWs from 'express-ws';
 
 async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  // Setup Hocuspocus Server
-  const hocuspocus = Server.configure({
-    name: 'hocuspocus',
-    port: PORT,
-    timeout: 30000,
-    debounce: 5000,
-    maxDebounce: 30000,
-    quiet: true,
-  });
-
-  // Setup Express-WS to handle upgrades
-  const { app: wsApp } = expressWs(app);
-
-  // Handle WebSocket connections for collaboration
-  wsApp.ws('/collaboration', (websocket, request) => {
-    hocuspocus.handleConnection(websocket, request);
-  });
-
-  // API routes FIRST
+  // API routes
   app.get("/api/health", (req, res) => {
     res.json({ status: "ok" });
   });
@@ -38,8 +18,6 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    // In production, serve static files (if built)
-    // This is just a fallback, usually handled by nginx or similar in real prod
     app.use(express.static('dist'));
   }
 

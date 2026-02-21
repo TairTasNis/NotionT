@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { X, Globe, PenTool, Copy, Check, Save, Network } from 'lucide-react';
+import { X, Globe, PenTool, Copy, Check, Save, Network, Lock, Unlock } from 'lucide-react';
 import { Project } from '../types';
 
 interface ShareModalProps {
@@ -44,7 +44,7 @@ export default function ShareModal({ isOpen, onClose, project, onUpdateProject, 
                 <h4 className="font-medium text-white">Сохранить версию</h4>
                 <p className="text-xs text-zinc-500">Создать точку восстановления в истории</p>
               </div>
-              <button 
+              <button
                 onClick={onSaveVersion}
                 className="flex items-center gap-2 px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors text-sm"
               >
@@ -69,9 +69,9 @@ export default function ShareModal({ isOpen, onClose, project, onUpdateProject, 
                 </div>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  className="sr-only peer" 
+                <input
+                  type="checkbox"
+                  className="sr-only peer"
                   checked={project.isPublicView || false}
                   onChange={(e) => onUpdateProject({ isPublicView: e.target.checked })}
                 />
@@ -82,26 +82,26 @@ export default function ShareModal({ isOpen, onClose, project, onUpdateProject, 
             {project.isPublicView && (
               <div className="space-y-3 animate-in fade-in slide-in-from-top-2">
                 <div className="flex gap-2">
-                  <input 
-                    type="text" 
-                    readOnly 
-                    value={viewLink} 
+                  <input
+                    type="text"
+                    readOnly
+                    value={viewLink}
                     className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-300 outline-none"
                   />
-                  <button 
+                  <button
                     onClick={() => copyToClipboard(viewLink, setCopiedView)}
                     className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors"
                   >
                     {copiedView ? <Check size={18} /> : <Copy size={18} />}
                   </button>
                 </div>
-                
+
                 {/* Mindmap Toggle */}
                 <div className="flex items-center gap-2 pl-2">
                   <label className="flex items-center gap-2 cursor-pointer group">
                     <div className="relative flex items-center">
-                      <input 
-                        type="checkbox" 
+                      <input
+                        type="checkbox"
                         className="peer sr-only"
                         checked={project.publicShowMindmap || false}
                         onChange={(e) => onUpdateProject({ publicShowMindmap: e.target.checked })}
@@ -115,6 +115,39 @@ export default function ShareModal({ isOpen, onClose, project, onUpdateProject, 
                       Показывать Mindmap на сайте
                     </span>
                   </label>
+                </div>
+
+                {/* Password Protection */}
+                <div className="space-y-2 pt-2 border-t border-zinc-800/50">
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-medium text-zinc-300 flex items-center gap-2">
+                      {project.password ? <Lock size={14} className="text-orange-400" /> : <Unlock size={14} className="text-zinc-500" />}
+                      Защита паролем
+                    </span>
+                    <button
+                      onClick={() => onUpdateProject({ password: project.password ? '' : '1234' })}
+                      className={`text-xs px-2 py-1 rounded transition-colors ${project.password ? 'text-red-400 hover:bg-red-400/10' : 'text-blue-400 hover:bg-blue-400/10'}`}
+                    >
+                      {project.password ? 'Убрать пароль' : 'Установить пароль'}
+                    </button>
+                  </div>
+                  {project.password !== undefined && project.password !== '' && (
+                    <div className="flex gap-2 animate-in fade-in slide-in-from-top-1">
+                      <div className="relative flex-1">
+                        <Lock className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={14} />
+                        <input
+                          type="text"
+                          placeholder="Введите пароль..."
+                          value={project.password}
+                          onChange={(e) => onUpdateProject({ password: e.target.value })}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg pl-9 pr-3 py-2 text-sm text-zinc-300 outline-none focus:border-orange-500/50 transition-colors"
+                        />
+                      </div>
+                    </div>
+                  )}
+                  <p className="text-[10px] text-zinc-500 italic">
+                    {project.password ? 'Просмотр будет доступен только после ввода этого пароля.' : 'Просмотр доступен всем, у кого есть ссылка.'}
+                  </p>
                 </div>
               </div>
             )}
@@ -135,9 +168,9 @@ export default function ShareModal({ isOpen, onClose, project, onUpdateProject, 
                 </div>
               </div>
               <label className="relative inline-flex items-center cursor-pointer">
-                <input 
-                  type="checkbox" 
-                  className="sr-only peer" 
+                <input
+                  type="checkbox"
+                  className="sr-only peer"
                   checked={project.isPublicEdit || false}
                   onChange={(e) => onUpdateProject({ isPublicEdit: e.target.checked })}
                 />
@@ -147,13 +180,13 @@ export default function ShareModal({ isOpen, onClose, project, onUpdateProject, 
 
             {project.isPublicEdit && (
               <div className="flex gap-2 animate-in fade-in slide-in-from-top-2">
-                <input 
-                  type="text" 
-                  readOnly 
-                  value={editLink} 
+                <input
+                  type="text"
+                  readOnly
+                  value={editLink}
                   className="flex-1 bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-300 outline-none"
                 />
-                <button 
+                <button
                   onClick={() => copyToClipboard(editLink, setCopiedEdit)}
                   className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors"
                 >

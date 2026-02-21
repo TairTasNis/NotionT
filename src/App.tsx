@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { HashRouter, Routes, Route, useNavigate, useParams, Navigate } from 'react-router-dom';
+import { HashRouter, Routes, Route, useNavigate, useParams } from 'react-router-dom';
 import Dashboard from './components/Dashboard';
 import Editor from './components/Editor';
 import PublicViewer from './components/PublicViewer';
 import { Project, ProjectType } from './types';
 import { AuthProvider, useAuth } from './contexts/AuthContext';
 import Login from './components/Login';
-import { database } from './lib/firebase';
-import { ref, onValue, set, push, remove, query, orderByChild, equalTo, get, update } from 'firebase/database';
+import { database, auth as firebaseAuth } from './lib/firebase';
+import { ref, onValue, set, push, remove, query, orderByChild, equalTo, update } from 'firebase/database';
 
 function DashboardWrapper() {
   const { user } = useAuth();
@@ -34,7 +34,7 @@ function DashboardWrapper() {
 
   const handleCreateProject = async (type: ProjectType, title: string) => {
     if (!user) return;
-    
+
     const newProjectId = push(ref(database, 'projects')).key;
     if (!newProjectId) return;
 
@@ -57,7 +57,6 @@ function DashboardWrapper() {
 
   const handleDeleteProject = async (id: string) => {
     try {
-      // Delete versions FIRST because rules depend on project existing
       await remove(ref(database, `project_versions/${id}`));
       await remove(ref(database, `projects/${id}`));
     } catch (error) {
@@ -79,8 +78,8 @@ function DashboardWrapper() {
   };
 
   return (
-    <Dashboard 
-      onCreateProject={handleCreateProject} 
+    <Dashboard
+      onCreateProject={handleCreateProject}
       projects={projects}
       onOpenProject={(id) => navigate(`/project/${id}`)}
       onDeleteProject={handleDeleteProject}
@@ -100,26 +99,28 @@ function EditorWrapper() {
   useEffect(() => {
     if (!projectId) return;
 
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
     const projectRef = ref(database, `projects/${projectId}`);
     const unsubscribe = onValue(projectRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
-        // Check permissions
-        if (user && data.ownerId === user.uid) {
-             setProject(data);
-        } else if (data.isPublicEdit) {
-             setProject(data);
+        if (data.ownerId === user.uid || data.isPublicEdit) {
+          setProject(data);
         } else {
-             setError("Нет доступа к редактированию.");
+          setError('Нет доступа к редактированию.');
         }
       } else {
-        setError("Проект не найден.");
+        setError('Проект не найден.');
       }
       setLoading(false);
     }, (err) => {
-        console.error(err);
-        setError("Ошибка загрузки.");
-        setLoading(false);
+      console.error(err);
+      setError('Ошибка загрузки.');
+      setLoading(false);
     });
 
     return () => unsubscribe();
@@ -127,10 +128,9 @@ function EditorWrapper() {
 
   const handleSaveProject = useCallback(async (updatedProject: Project) => {
     try {
-        await set(ref(database, `projects/${updatedProject.id}`), updatedProject);
+      await set(ref(database, `projects/${updatedProject.id}`), updatedProject);
     } catch (error) {
-        console.error("Error saving project:", error);
-        alert("Ошибка сохранения проекта. Проверьте права доступа.");
+      console.error("Error saving project:", error);
     }
   }, []);
 
@@ -147,29 +147,25 @@ function EditorWrapper() {
     };
     try {
       await set(ref(database, `project_versions/${project.id}/${versionId}`), version);
-      
-      // Also update the main project
-      await set(ref(database, `projects/${project.id}`), {
-        ...project,
+      await update(ref(database, `projects/${project.id}`), {
         content,
         title,
         lastModified: timestamp
       });
-
-      alert("Версия сохранена и изменения опубликованы!");
+      alert("Версия сохранена!");
     } catch (error) {
       console.error("Error saving version:", error);
-      alert("Ошибка сохранения версии. Проверьте права доступа.");
     }
   }, [project]);
 
   if (loading) return <div className="min-h-screen bg-black text-white flex items-center justify-center">Загрузка...</div>;
+  if (!user) return <Login />;
   if (error) return <div className="min-h-screen bg-black text-white flex items-center justify-center">{error} <button onClick={() => navigate('/')} className="ml-4 underline">На главную</button></div>;
   if (!project) return null;
 
   return (
-    <Editor 
-      project={project} 
+    <Editor
+      project={project}
       onBack={() => navigate('/')}
       onSave={handleSaveProject}
       onSaveVersion={handleSaveVersion}
@@ -197,4 +193,3 @@ export default function App() {
     </AuthProvider>
   );
 }
-
