@@ -33,10 +33,10 @@ export default function MindmapGraph({ data, onNodeClick, readOnly, onNodeAdd, o
   const svgRef = useRef<SVGSVGElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; visible: boolean; nodeId?: string } | null>(null);
-  const [modal, setModal] = useState<{ 
-    isOpen: boolean; 
+  const [modal, setModal] = useState<{
+    isOpen: boolean;
     type: 'input' | 'confirm';
-    nodeId: string; 
+    nodeId: string;
     title: string;
   } | null>(null);
   const [inputValue, setInputValue] = useState("");
@@ -53,7 +53,7 @@ export default function MindmapGraph({ data, onNodeClick, readOnly, onNodeAdd, o
         onNodeDelete(modal.nodeId);
       }
     }
-    
+
     setModal(null);
     setInputValue("");
   };
@@ -69,7 +69,7 @@ export default function MindmapGraph({ data, onNodeClick, readOnly, onNodeAdd, o
 
     const width = wrapperRef.current.clientWidth;
     const height = wrapperRef.current.clientHeight;
-    
+
     const { nodes, links } = flattenGraph(data);
 
     // Clear previous render
@@ -92,20 +92,20 @@ export default function MindmapGraph({ data, onNodeClick, readOnly, onNodeAdd, o
       });
 
     svg.call(zoom)
-       .on("contextmenu", (event) => {
-         console.log("Background context menu triggered");
-         if (readOnly) return;
-         event.preventDefault();
-         
-         const rect = wrapperRef.current!.getBoundingClientRect();
-         console.log("Setting context menu at:", event.clientX - rect.left, event.clientY - rect.top);
-         setContextMenu({
-           x: event.clientX - rect.left,
-           y: event.clientY - rect.top,
-           visible: true,
-           nodeId: undefined // undefined means background
-         });
-       });
+      .on("contextmenu", (event) => {
+        console.log("Background context menu triggered");
+        if (readOnly) return;
+        event.preventDefault();
+
+        const rect = wrapperRef.current!.getBoundingClientRect();
+        console.log("Setting context menu at:", event.clientX - rect.left, event.clientY - rect.top);
+        setContextMenu({
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+          visible: true,
+          nodeId: undefined // undefined means background
+        });
+      });
 
     // Simulation
     const simulation = d3.forceSimulation(nodes as any)
@@ -151,7 +151,7 @@ export default function MindmapGraph({ data, onNodeClick, readOnly, onNodeAdd, o
         if (readOnly) return;
         event.preventDefault();
         event.stopPropagation();
-        
+
         const rect = wrapperRef.current!.getBoundingClientRect();
         setContextMenu({
           x: event.clientX - rect.left,
@@ -205,7 +205,7 @@ export default function MindmapGraph({ data, onNodeClick, readOnly, onNodeAdd, o
 
   return (
     <div ref={wrapperRef} className="w-full h-full bg-zinc-950 relative overflow-hidden">
-       <div 
+      <div
         className="absolute inset-0 opacity-20 pointer-events-none"
         style={{
           backgroundImage: 'radial-gradient(#444 1px, transparent 1px)',
@@ -214,19 +214,19 @@ export default function MindmapGraph({ data, onNodeClick, readOnly, onNodeAdd, o
       />
       <svg ref={svgRef} className="w-full h-full" />
       <div className="absolute bottom-4 right-4 bg-zinc-900/80 p-2 rounded-lg text-xs text-zinc-500 border border-white/10 pointer-events-none">
-        Перетаскивайте узлы<br/>Клик для перехода к тексту<br/>ПКМ для редактирования
+        Перетаскивайте узлы<br />Клик для просмотра<br />ПКМ для редактирования
       </div>
 
       {/* React Context Menu */}
       {contextMenu && contextMenu.visible && (
-        <div 
+        <div
           className="absolute bg-zinc-900 border border-zinc-700 rounded shadow-xl py-1 z-50 min-w-[160px]"
           style={{ left: contextMenu.x, top: contextMenu.y }}
           onClick={(e) => e.stopPropagation()}
         >
           {contextMenu.nodeId ? (
             <>
-              <button 
+              <button
                 className="w-full text-left px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors"
                 onClick={(e) => {
                   e.stopPropagation();
@@ -238,7 +238,7 @@ export default function MindmapGraph({ data, onNodeClick, readOnly, onNodeAdd, o
                 Добавить подпункт
               </button>
               {contextMenu.nodeId !== 'root' && (
-                <button 
+                <button
                   className="w-full text-left px-3 py-1.5 text-sm text-red-400 hover:bg-zinc-800 transition-colors"
                   onClick={(e) => {
                     e.stopPropagation();
@@ -251,7 +251,7 @@ export default function MindmapGraph({ data, onNodeClick, readOnly, onNodeAdd, o
               )}
             </>
           ) : (
-            <button 
+            <button
               className="w-full text-left px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 transition-colors"
               onClick={(e) => {
                 e.stopPropagation();
@@ -268,16 +268,16 @@ export default function MindmapGraph({ data, onNodeClick, readOnly, onNodeAdd, o
       {/* Custom Input/Confirm Modal */}
       {modal && modal.isOpen && (
         <div className="absolute inset-0 bg-black/60 flex items-center justify-center z-[60]" onClick={() => setModal(null)}>
-          <div 
-            className="bg-zinc-900 p-4 rounded-xl border border-white/10 w-80 shadow-2xl" 
+          <div
+            className="bg-zinc-900 p-4 rounded-xl border border-white/10 w-80 shadow-2xl"
             onClick={e => e.stopPropagation()}
           >
             <h3 className="text-lg font-medium mb-4 text-white">{modal.title}</h3>
-            
+
             {modal.type === 'input' ? (
-              <input 
+              <input
                 autoFocus
-                type="text" 
+                type="text"
                 className="w-full bg-zinc-950 border border-white/10 rounded p-2 mb-4 outline-none focus:border-white/30 text-white"
                 value={inputValue}
                 onChange={e => setInputValue(e.target.value)}
@@ -294,19 +294,18 @@ export default function MindmapGraph({ data, onNodeClick, readOnly, onNodeAdd, o
             )}
 
             <div className="flex justify-end gap-2">
-              <button 
-                onClick={() => setModal(null)} 
+              <button
+                onClick={() => setModal(null)}
                 className="px-3 py-1.5 text-sm text-zinc-400 hover:text-white transition-colors"
               >
                 Отмена
               </button>
-              <button 
-                onClick={handleModalConfirm} 
-                className={`px-3 py-1.5 text-sm rounded font-medium transition-colors ${
-                  modal.type === 'confirm' 
-                    ? 'bg-red-500 hover:bg-red-600 text-white' 
+              <button
+                onClick={handleModalConfirm}
+                className={`px-3 py-1.5 text-sm rounded font-medium transition-colors ${modal.type === 'confirm'
+                    ? 'bg-red-500 hover:bg-red-600 text-white'
                     : 'bg-white text-black hover:bg-zinc-200'
-                }`}
+                  }`}
               >
                 {modal.type === 'confirm' ? 'Удалить' : 'Создать'}
               </button>

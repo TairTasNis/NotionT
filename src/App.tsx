@@ -13,12 +13,14 @@ function DashboardWrapper() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [projects, setProjects] = useState<Project[]>([]);
+  const [folders, setFolders] = useState<any[]>([]);
 
   useEffect(() => {
     if (!user) return;
 
+    // Load projects
     const projectsRef = query(ref(database, 'projects'), orderByChild('ownerId'), equalTo(user.uid));
-    const unsubscribe = onValue(projectsRef, (snapshot) => {
+    const unsubscribeProjects = onValue(projectsRef, (snapshot) => {
       const data = snapshot.val();
       if (data) {
         const projectList = Object.values(data) as Project[];
@@ -29,10 +31,26 @@ function DashboardWrapper() {
       }
     });
 
-    return () => unsubscribe();
+    // Load folders
+    const foldersRef = query(ref(database, 'folders'), orderByChild('ownerId'), equalTo(user.uid));
+    const unsubscribeFolders = onValue(foldersRef, (snapshot) => {
+      const data = snapshot.val();
+      if (data) {
+        const folderList = Object.values(data) as any[];
+        folderList.sort((a, b) => b.createdAt - a.createdAt);
+        setFolders(folderList);
+      } else {
+        setFolders([]);
+      }
+    });
+
+    return () => {
+      unsubscribeProjects();
+      unsubscribeFolders();
+    };
   }, [user]);
 
-  const handleCreateProject = async (type: ProjectType, title: string) => {
+  const handleCreateProject = async (type: ProjectType, title: string, folderId: string | null = null) => {
     if (!user) return;
 
     const newProjectId = push(ref(database, 'projects')).key;
@@ -44,7 +62,8 @@ function DashboardWrapper() {
       type: type,
       content: type === 'mindmap' ? '# Root' : '',
       lastModified: Date.now(),
-      ownerId: user.uid
+      ownerId: user.uid,
+      ...(folderId ? { folderId } : {})
     };
 
     try {
@@ -77,13 +96,82 @@ function DashboardWrapper() {
     }
   };
 
+  // Folder Actions
+  const handleCreateFolder = async (title: string) => {
+    if (!user) return;
+    const newFolderId = push(ref(database, 'folders')).key;
+    if (!newFolderId) return;
+    try {
+      await set(ref(database, `folders/${newFolderId}`), {
+        id: newFolderId,
+        title,
+        ownerId: user.uid,
+        createdAt: Date.now()
+      });
+    } catch (error) {
+      console.error("Error creating folder:", error);
+    }
+  };
+
+  const handleDeleteFolder = async (folderId: string) => {
+    try {
+      // First, move all projects in this folder to root
+      const projectsToMove = projects.filter(p => p.folderId === folderId);
+      for (const p of projectsToMove) {
+        await handleMoveProject(p.id, null);
+      }
+      await remove(ref(database, `folders/${folderId}`));
+    } catch (error) {
+      console.error("Error deleting folder:", error);
+    }
+  };
+
+  const handleRenameFolder = async (id: string, newTitle: string) => {
+    try {
+      await update(ref(database, `folders/${id}`), { title: newTitle });
+    } catch (error) {
+      console.error("Error renaming folder:", error);
+    }
+  };
+
+  const handleMoveProject = async (projectId: string, folderId: string | null) => {
+    try {
+      await update(ref(database, `projects/${projectId}`), { folderId: folderId || null });
+    } catch (error) {
+      console.error("Error moving project:", error);
+    }
+  };
+
+  const handleSetProjectPassword = async (projectId: string, password?: string) => {
+    try {
+      await update(ref(database, `projects/${projectId}`), { password: password || null });
+    } catch (error) {
+      console.error("Error setting project password:", error);
+    }
+  };
+
+  const handleSetFolderPassword = async (folderId: string, password?: string) => {
+    try {
+      await update(ref(database, `folders/${folderId}`), { password: password || null });
+    } catch (error) {
+      console.error("Error setting folder password:", error);
+    }
+  };
+
   return (
     <Dashboard
       onCreateProject={handleCreateProject}
       projects={projects}
+      folders={folders}
       onOpenProject={(id) => navigate(`/project/${id}`)}
       onDeleteProject={handleDeleteProject}
       onRenameProject={handleRenameProject}
+      onCreateFolder={handleCreateFolder}
+      onDeleteFolder={handleDeleteFolder}
+      onRenameFolder={handleRenameFolder}
+      onMoveProject={handleMoveProject}
+      onSetProjectPassword={handleSetProjectPassword}
+      onSetFolderPassword={handleSetFolderPassword}
     />
   );
 }
