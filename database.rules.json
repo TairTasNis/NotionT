@@ -10,6 +10,16 @@
         ".write": "auth != null && ((!data.exists() && newData.child('ownerId').val() === auth.uid) || (data.exists() && (data.child('ownerId').val() === auth.uid || data.child('isPublicEdit').val() === true)))"
       }
     },
+    "folders": {
+      ".indexOn": [
+        "ownerId"
+      ],
+      ".read": "auth != null && query.orderByChild == 'ownerId' && query.equalTo == auth.uid",
+      "$folderId": {
+        ".read": "auth != null && data.child('ownerId').val() === auth.uid",
+        ".write": "auth != null && ((!data.exists() && newData.child('ownerId').val() === auth.uid) || (data.exists() && data.child('ownerId').val() === auth.uid))"
+      }
+    },
     "project_versions": {
       "$projectId": {
         ".read": "root.child('projects').child($projectId).child('isPublicView').val() === true || root.child('projects').child($projectId).child('isPublicEdit').val() === true || (auth != null && root.child('projects').child($projectId).child('ownerId').val() === auth.uid)",
@@ -28,6 +38,12 @@
       "$uid": {
         ".read": "auth != null && $uid === auth.uid",
         ".write": "auth != null && $uid === auth.uid"
+      }
+    },
+    "usernames": {
+      "$username": {
+        ".read": true,
+        ".write": "auth != null && (!data.exists() || data.val() === auth.uid)"
       }
     }
   }

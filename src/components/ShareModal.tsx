@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { X, Globe, PenTool, Copy, Check, Save, Network, Lock, Unlock } from 'lucide-react';
+import { X, Globe, PenTool, Copy, Check, Save, Network, Lock, Unlock, User, RefreshCw } from 'lucide-react';
 import { Project } from '../types';
+import { useAuth } from '../contexts/AuthContext';
 
 interface ShareModalProps {
   isOpen: boolean;
@@ -13,6 +14,7 @@ interface ShareModalProps {
 export default function ShareModal({ isOpen, onClose, project, onUpdateProject, onSaveVersion }: ShareModalProps) {
   const [copiedView, setCopiedView] = useState(false);
   const [copiedEdit, setCopiedEdit] = useState(false);
+  const { user, userProfile } = useAuth();
 
   if (!isOpen) return null;
 
@@ -24,6 +26,21 @@ export default function ShareModal({ isOpen, onClose, project, onUpdateProject, 
     navigator.clipboard.writeText(text);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const buildAuthorSnapshot = () => ({
+    authorFirstName: userProfile?.firstName || user?.displayName?.split(' ')[0] || '',
+    authorLastName: userProfile?.lastName || user?.displayName?.split(' ').slice(1).join(' ') || '',
+    authorUsername: userProfile?.username || user?.email?.split('@')[0] || '',
+    authorAvatar: userProfile?.avatarUrl || user?.photoURL || '',
+  });
+
+  const handleAuthorToggle = (checked: boolean) => {
+    if (checked) {
+      onUpdateProject({ publicShowAuthor: true, ...buildAuthorSnapshot() });
+    } else {
+      onUpdateProject({ publicShowAuthor: false });
+    }
   };
 
   return (
@@ -115,6 +132,58 @@ export default function ShareModal({ isOpen, onClose, project, onUpdateProject, 
                       Показывать Mindmap на сайте
                     </span>
                   </label>
+                </div>
+
+                {/* Show Author Toggle */}
+                <div className="pl-2 space-y-2">
+                  <label className="flex items-center gap-2 cursor-pointer group">
+                    <div className="relative flex items-center">
+                      <input
+                        type="checkbox"
+                        className="peer sr-only"
+                        checked={project.publicShowAuthor || false}
+                        onChange={(e) => handleAuthorToggle(e.target.checked)}
+                      />
+                      <div className="w-4 h-4 border border-zinc-600 rounded bg-zinc-900 peer-checked:bg-blue-600 peer-checked:border-blue-600 transition-colors flex items-center justify-center">
+                        <Check size={12} className="text-white opacity-0 peer-checked:opacity-100" />
+                      </div>
+                    </div>
+                    <span className="text-sm text-zinc-400 group-hover:text-zinc-300 transition-colors flex items-center gap-1.5">
+                      <User size={14} />
+                      Показывать мой аккаунт
+                    </span>
+                  </label>
+
+                  {project.publicShowAuthor && (
+                    <div className="flex items-center gap-3 ml-6 p-2.5 bg-zinc-950/60 rounded-xl border border-white/5">
+                      {(project.authorAvatar || buildAuthorSnapshot().authorAvatar) ? (
+                        <img
+                          src={project.authorAvatar || buildAuthorSnapshot().authorAvatar}
+                          alt="avatar"
+                          className="w-9 h-9 rounded-full object-cover border border-white/10 shrink-0"
+                        />
+                      ) : (
+                        <div className="w-9 h-9 rounded-full bg-zinc-800 flex items-center justify-center text-zinc-300 text-sm font-medium shrink-0">
+                          {(project.authorFirstName || buildAuthorSnapshot().authorFirstName)?.[0]?.toUpperCase() || '?'}
+                        </div>
+                      )}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-sm text-white font-medium truncate">
+                          {[project.authorFirstName, project.authorLastName].filter(Boolean).join(' ') || 'Без имени'}
+                        </div>
+                        <div className="text-xs text-zinc-500 truncate">
+                          @{project.authorUsername || buildAuthorSnapshot().authorUsername || 'username'}
+                        </div>
+                      </div>
+                      <button
+                        onClick={() => onUpdateProject({ ...buildAuthorSnapshot() })}
+                        className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded-lg transition-colors shrink-0"
+                        title="Обновить данные из профиля"
+                      >
+                        <RefreshCw size={14} />
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Password Protection */}

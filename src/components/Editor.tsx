@@ -1,5 +1,5 @@
 import React, { useState, useRef, useCallback, useEffect, useMemo } from 'react';
-import { ArrowLeft, Bold, Italic, Underline, Heading1, Heading2, Heading3, LayoutPanelLeft, FileText, Network, Image as ImageIcon, Table as TableIcon, Eye, EyeOff, Plus, Trash2, Columns, Rows, ArrowRight, ArrowDown, Lock, Unlock, Maximize, BarChart as BarChartIcon, Code as CodeIcon, Languages, Share2, History, UploadCloud, Edit2, X, Check } from 'lucide-react';
+import { ArrowLeft, Bold, Italic, Underline, Heading1, Heading2, Heading3, LayoutPanelLeft, FileText, Network, Image as ImageIcon, Table as TableIcon, Eye, EyeOff, Plus, Trash2, Columns, Rows, ArrowRight, ArrowDown, Lock, Unlock, Maximize, BarChart as BarChartIcon, Code as CodeIcon, Languages, Share2, History, UploadCloud, Edit2, X, Check, Camera, FolderOpen, ChevronRight } from 'lucide-react';
 import { Project, ProjectType, ProjectVersion } from '../types';
 import { database } from '../lib/firebase';
 import { ref, onValue, get, remove, update, set } from 'firebase/database';
@@ -63,24 +63,32 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
   const [editingVersionId, setEditingVersionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [editorStateToken, setEditorStateToken] = useState(0);
-  const [saveStatus, setSaveStatus] = useState<'saved' | 'saving' | 'idle'>('idle');
+  const [saveStatus, setSaveStatus] = useState<'saved' | 'unsaved' | 'idle'>('idle');
   const saveTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const initialLoadRef = useRef(true);
   const [remoteCursors, setRemoteCursors] = useState<Record<string, { name: string; color: string; line: number; pos: number }>>({});
 
+  // Mindmap node detail popup
+  const [nodePopup, setNodePopup] = useState<{ title: string; content: string; lineIndex: number; level: number } | null>(null);
 
-  // Stabilized Save: 50ms debounce batches fast typing and prevents race conditions
+  // Image menu dropdown
+  const [imageMenuOpen, setImageMenuOpen] = useState(false);
+  const cameraInputRef = useRef<HTMLInputElement>(null);
+
+
+  // Stabilized Save: 800ms debounce so the user sees the red indicator while typing
   useEffect(() => {
     if (initialLoadRef.current) {
       initialLoadRef.current = false;
       return;
     }
 
+    setSaveStatus('unsaved');
+
     if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
 
     saveTimeoutRef.current = setTimeout(() => {
       if (!user) return;
-      setSaveStatus('saving');
       onSave({
         ...project,
         title,
@@ -90,13 +98,19 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
         lastModifiedBy: user.uid,
       });
       setSaveStatus('saved');
-      setTimeout(() => setSaveStatus('idle'), 2000);
-    }, 50);
+    }, 800);
 
     return () => {
       if (saveTimeoutRef.current) clearTimeout(saveTimeoutRef.current);
     };
   }, [content, title, user]);
+
+  // Close image menu on outside click
+  useEffect(() => {
+    const handler = () => setImageMenuOpen(false);
+    window.addEventListener('click', handler);
+    return () => window.removeEventListener('click', handler);
+  }, []);
 
   // Firebase Realtime Database listener — sync remote changes
   useEffect(() => {
@@ -376,9 +390,25 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
     setTableModal({ ...tableModal, isOpen: false });
   };
 
-  const handleNodeClick = useCallback((lineIndex: number) => {
-    if (!editor) return;
+  // Extract text content of a section (from heading to next heading of same/higher level)
+  const getSectionContent = useCallback((lineIndex: number, level: number) => {
+    const lines = content.split('\n');
+    const startLine = lineIndex;
+    let endLine = lines.length;
 
+    for (let i = startLine + 1; i < lines.length; i++) {
+      const match = lines[i].match(/^(#{1,6})\s/);
+      if (match && match[1].length <= level) {
+        endLine = i;
+        break;
+      }
+    }
+
+    // Return everything between start+1 and end (skip the heading line itself)
+    return lines.slice(startLine + 1, endLine).join('\n').trim();
+  }, [content]);
+
+  const handleNodeClick = useCallback((lineIndex: number) => {
     const findNodeByLine = (node: any, line: number): any => {
       if (node.line === line) return node;
       for (const child of node.children) {
@@ -389,6 +419,37 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
     };
 
     const targetNode = findNodeByLine(headingTree, lineIndex);
+
+    if (targetNode) {
+      const sectionText = getSectionContent(targetNode.line, targetNode.level);
+      setNodePopup({
+        title: targetNode.text,
+        content: sectionText || '(пусто)',
+        lineIndex: targetNode.line,
+        level: targetNode.level,
+      });
+    }
+  }, [headingTree, getSectionContent]);
+
+  const handleGoToFragment = useCallback(() => {
+    if (!editor || !nodePopup) return;
+
+    const findNodeByLine = (node: any, line: number): any => {
+      if (node.line === line) return node;
+      for (const child of node.children) {
+        const found = findNodeByLine(child, line);
+        if (found) return found;
+      }
+      return null;
+    };
+
+    const targetNode = findNodeByLine(headingTree, nodePopup.lineIndex);
+    setNodePopup(null);
+
+    // Switch to text view if in mindmap-only mode
+    if (viewMode === 'mindmap') {
+      setViewMode('both');
+    }
 
     if (targetNode) {
       let foundPos = -1;
@@ -405,13 +466,25 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
 
       if (foundPos !== -1) {
         editor.chain().focus().setTextSelection(foundPos).scrollIntoView().run();
-      } else {
-        editor.chain().focus().run();
+
+        // Highlight the heading for 2 seconds
+        setTimeout(() => {
+          const domNode = editor.view.domAtPos(foundPos);
+          if (domNode && domNode.node) {
+            const el = (domNode.node as HTMLElement).closest?.('h1, h2, h3, h4, h5, h6') || domNode.node.parentElement;
+            if (el && el instanceof HTMLElement) {
+              el.style.transition = 'background-color 0.3s ease';
+              el.style.backgroundColor = 'rgba(234, 179, 8, 0.3)';
+              el.style.borderRadius = '4px';
+              setTimeout(() => {
+                el.style.backgroundColor = 'transparent';
+              }, 2000);
+            }
+          }
+        }, 100);
       }
-    } else {
-      editor.chain().focus().run();
     }
-  }, [editor, headingTree]);
+  }, [editor, headingTree, nodePopup, viewMode]);
 
   const handleNodeAdd = (parentId: string, text: string) => {
     const findNode = (node: any): any => {
@@ -563,8 +636,16 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
         accept="image/*"
         onChange={handleImageUpload}
       />
+      <input
+        type="file"
+        ref={cameraInputRef}
+        className="hidden"
+        accept="image/*"
+        capture="environment"
+        onChange={handleImageUpload}
+      />
 
-      <header className="h-14 border-b border-white/10 flex items-center px-2 md:px-4 bg-zinc-950 shrink-0 z-20 overflow-x-auto gap-2 md:gap-4 [&::-webkit-scrollbar]:hidden">
+      <header className="h-14 border-b border-white/10 flex items-center px-2 md:px-4 bg-zinc-950 shrink-0 z-20 gap-2 md:gap-4">
         <div className="flex items-center gap-2 md:gap-4 shrink-0">
           <button
             onClick={handleBack}
@@ -579,10 +660,10 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
             className="bg-transparent border-none outline-none font-medium text-sm w-32 md:w-64 placeholder-zinc-600 hidden md:block"
             placeholder="Без названия"
           />
-          {/* Auto-save status indicator */}
-          <span className="text-xs text-zinc-500 hidden md:inline-flex items-center gap-1 ml-2">
-            {saveStatus === 'saving' && <><span className="w-1.5 h-1.5 rounded-full bg-yellow-400 animate-pulse" /> Сохранение...</>}
-            {saveStatus === 'saved' && <><span className="w-1.5 h-1.5 rounded-full bg-green-400" /> Сохранено</>}
+          {/* Auto-save dot indicator */}
+          <span className="hidden md:inline-flex items-center ml-2" title={saveStatus === 'unsaved' ? 'Есть несохранённые изменения' : saveStatus === 'saved' ? 'Все изменения сохранены' : ''}>
+            {saveStatus === 'unsaved' && <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse" />}
+            {saveStatus === 'saved' && <span className="w-2 h-2 rounded-full bg-green-500" />}
           </span>
         </div>
 
@@ -609,9 +690,31 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
           </div>
 
           {/* Insert buttons - Always visible */}
-          <button onClick={() => fileInputRef.current?.click()} className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white" title="Изображение">
-            <ImageIcon size={16} />
-          </button>
+          <div className="relative">
+            <button
+              onClick={(e) => { e.stopPropagation(); setImageMenuOpen(!imageMenuOpen); }}
+              className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white"
+              title="Изображение"
+            >
+              <ImageIcon size={16} />
+            </button>
+            {imageMenuOpen && (
+              <div className="absolute left-0 top-full mt-2 w-44 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl py-1 z-50" onClick={e => e.stopPropagation()}>
+                <button
+                  onClick={() => { fileInputRef.current?.click(); setImageMenuOpen(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 text-sm text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors"
+                >
+                  <FolderOpen size={14} /> Выбрать файл
+                </button>
+                <button
+                  onClick={() => { cameraInputRef.current?.click(); setImageMenuOpen(false); }}
+                  className="w-full flex items-center gap-3 px-3 py-2 text-sm text-zinc-300 hover:text-white hover:bg-zinc-800 transition-colors"
+                >
+                  <Camera size={14} /> Снять фото
+                </button>
+              </div>
+            )}
+          </div>
           <button onClick={handleTableInsertClick} className="p-1.5 hover:bg-zinc-800 rounded text-zinc-400 hover:text-white" title="Таблица">
             <TableIcon size={16} />
           </button>
@@ -1052,6 +1155,40 @@ export default function Editor({ project, onBack, onSave, onSaveVersion }: Edito
                 className="px-3 py-1.5 text-sm bg-red-600 hover:bg-red-500 text-white rounded font-medium transition-colors"
               >
                 Удалить
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Mindmap Node Detail Popup */}
+      {nodePopup && (
+        <div className="absolute inset-0 bg-black/60 backdrop-blur-sm flex items-center justify-center z-[80]" onClick={() => setNodePopup(null)}>
+          <div
+            className="bg-zinc-900 border border-zinc-800 rounded-2xl w-[520px] max-h-[70vh] shadow-2xl flex flex-col overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 shrink-0">
+              <h3 className="text-lg font-semibold text-white truncate">{nodePopup.title}</h3>
+              <button onClick={() => setNodePopup(null)} className="text-zinc-400 hover:text-white p-1 hover:bg-zinc-800 rounded-full transition-colors">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto px-6 py-4">
+              <pre className="text-sm text-zinc-300 whitespace-pre-wrap font-sans leading-relaxed">{nodePopup.content}</pre>
+            </div>
+            <div className="px-6 py-4 border-t border-zinc-800 flex justify-end gap-3 shrink-0">
+              <button
+                onClick={() => setNodePopup(null)}
+                className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors"
+              >
+                Закрыть
+              </button>
+              <button
+                onClick={handleGoToFragment}
+                className="flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white hover:bg-blue-500 rounded-xl font-medium transition-colors"
+              >
+                Перейти к фрагменту <ChevronRight size={16} />
               </button>
             </div>
           </div>

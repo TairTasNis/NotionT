@@ -8,6 +8,14 @@ export interface ProjectVersion {
   timestamp: number;
 }
 
+export interface Folder {
+  id: string;
+  title: string;
+  ownerId: string;
+  createdAt: number;
+  password?: string;
+}
+
 export interface Project {
   id: string;
   title: string;
@@ -20,5 +28,23 @@ export interface Project {
   isPublicView?: boolean;
   isPublicEdit?: boolean;
   publicShowMindmap?: boolean;
+  publicShowAuthor?: boolean;
+  authorFirstName?: string;
+  authorLastName?: string;
+  authorUsername?: string;
+  authorAvatar?: string;
   password?: string;
+  folderId?: string;
+}
+
+export interface UserProfile {
+  uid: string;
+  email: string;
+  username: string;
+  firstName: string;
+  lastName: string;
+  dateOfBirth: string;
+  createdAt: number;
+  linkedGoogle?: boolean;
+  avatarUrl?: string;
 }

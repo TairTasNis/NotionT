@@ -176,12 +176,44 @@ export default function PublicViewer() {
 
         {/* Content Area */}
         <div className={`${project.publicShowMindmap ? 'w-full md:w-1/2 md:border-r border-white/10 h-[50vh] md:h-screen overflow-y-auto px-4 md:px-8 py-8 md:py-16' : ''}`}>
-          <header className="mb-12 text-center">
-            <h1 className="text-4xl font-bold tracking-tight mb-4 text-white">{project.title}</h1>
-            <div className="text-sm text-zinc-500">
-              {new Date(project.lastModified).toLocaleDateString()}
-            </div>
-          </header>
+          {project.publicShowAuthor ? (
+            <header className="mb-12 flex items-start justify-between gap-6">
+              <div className="text-left min-w-0">
+                <h1 className="text-4xl font-bold tracking-tight mb-4 text-white">{project.title}</h1>
+                <div className="text-sm text-zinc-500">
+                  {new Date(project.lastModified).toLocaleDateString()}
+                </div>
+              </div>
+              <div className="flex items-center gap-3 shrink-0 text-right">
+                {project.authorAvatar ? (
+                  <img
+                    src={project.authorAvatar}
+                    alt={[project.authorFirstName, project.authorLastName].filter(Boolean).join(' ') || project.authorUsername || 'Автор'}
+                    className="w-11 h-11 rounded-full object-cover border border-white/10"
+                  />
+                ) : (
+                  <div className="w-11 h-11 rounded-full bg-zinc-800 flex items-center justify-center text-zinc-200 text-base font-medium border border-white/10">
+                    {project.authorFirstName?.[0]?.toUpperCase() || project.authorUsername?.[0]?.toUpperCase() || '?'}
+                  </div>
+                )}
+                <div className="min-w-0">
+                  <div className="text-sm text-white font-medium truncate">
+                    {[project.authorFirstName, project.authorLastName].filter(Boolean).join(' ') || 'Автор'}
+                  </div>
+                  {project.authorUsername && (
+                    <div className="text-xs text-zinc-500 truncate">@{project.authorUsername}</div>
+                  )}
+                </div>
+              </div>
+            </header>
+          ) : (
+            <header className="mb-12 text-center">
+              <h1 className="text-4xl font-bold tracking-tight mb-4 text-white">{project.title}</h1>
+              <div className="text-sm text-zinc-500">
+                {new Date(project.lastModified).toLocaleDateString()}
+              </div>
+            </header>
+          )}
 
           <article className="prose prose-lg prose-invert max-w-none">
             <EditorContent editor={editor} />
